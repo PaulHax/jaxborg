@@ -12,6 +12,7 @@ from jaxborg.constants import (
     ACTIVITY_EXPLOIT,
     COMPROMISE_NONE,
     COMPROMISE_USER,
+    COMPROMISE_PRIVILEGED,
 )
 from jaxborg.state import CC4State, CC4Const
 
@@ -36,6 +37,8 @@ RED_EXPLOIT_ETERNALBLUE_START = RED_EXPLOIT_SQL_END
 RED_EXPLOIT_ETERNALBLUE_END = RED_EXPLOIT_ETERNALBLUE_START + GLOBAL_MAX_HOSTS
 RED_EXPLOIT_BLUEKEEP_START = RED_EXPLOIT_ETERNALBLUE_END
 RED_EXPLOIT_BLUEKEEP_END = RED_EXPLOIT_BLUEKEEP_START + GLOBAL_MAX_HOSTS
+RED_PRIVESC_START = RED_EXPLOIT_BLUEKEEP_END
+RED_PRIVESC_END = RED_PRIVESC_START + GLOBAL_MAX_HOSTS
 
 ACTION_TYPE_SLEEP = 0
 ACTION_TYPE_DISCOVER = 1
@@ -48,6 +51,7 @@ ACTION_TYPE_EXPLOIT_HARAKA = 7
 ACTION_TYPE_EXPLOIT_SQL = 8
 ACTION_TYPE_EXPLOIT_ETERNALBLUE = 9
 ACTION_TYPE_EXPLOIT_BLUEKEEP = 10
+ACTION_TYPE_PRIVESC = 11
 
 _EXPLOIT_RANGES = (
     (RED_EXPLOIT_SSH_START, RED_EXPLOIT_SSH_END, ACTION_TYPE_EXPLOIT_SSH),
@@ -69,6 +73,7 @@ _ENCODE_MAP = {
     "ExploitRemoteService_cc4SQLInjection": RED_EXPLOIT_SQL_START,
     "ExploitRemoteService_cc4EternalBlue": RED_EXPLOIT_ETERNALBLUE_START,
     "ExploitRemoteService_cc4BlueKeep": RED_EXPLOIT_BLUEKEEP_START,
+    "PrivilegeEscalate": RED_PRIVESC_START,
 }
 
 
@@ -97,6 +102,10 @@ def decode_red_action(action_idx: int, agent_id: int, const: CC4Const):
         in_range = (action_idx >= start) & (action_idx < end)
         action_type = jnp.where(in_range, atype, action_type)
         target_host = jnp.where(in_range, action_idx - start, target_host)
+
+    is_privesc = (action_idx >= RED_PRIVESC_START) & (action_idx < RED_PRIVESC_END)
+    action_type = jnp.where(is_privesc, ACTION_TYPE_PRIVESC, action_type)
+    target_host = jnp.where(is_privesc, action_idx - RED_PRIVESC_START, target_host)
 
     target_subnet = jnp.where(is_discover, action_idx - RED_DISCOVER_START, jnp.int32(-1))
     return action_type, target_subnet, target_host
@@ -392,6 +401,45 @@ def _apply_exploit_bluekeep(
     return state
 
 
+def _apply_privesc(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+    target_host: chex.Array,
+) -> CC4State:
+    is_active = const.host_active[target_host]
+    has_session = state.red_sessions[agent_id, target_host]
+    not_already_privileged = state.red_privilege[agent_id, target_host] < COMPROMISE_PRIVILEGED
+    success = is_active & has_session & not_already_privileged
+
+    new_priv = jnp.where(success, COMPROMISE_PRIVILEGED, state.red_privilege[agent_id, target_host])
+    red_privilege = jnp.where(
+        success,
+        state.red_privilege.at[agent_id, target_host].set(new_priv),
+        state.red_privilege,
+    )
+
+    host_compromised = jnp.where(
+        success,
+        state.host_compromised.at[target_host].set(
+            jnp.maximum(state.host_compromised[target_host], COMPROMISE_PRIVILEGED)
+        ),
+        state.host_compromised,
+    )
+
+    activity = jnp.where(
+        success,
+        state.red_activity_this_step.at[target_host].set(ACTIVITY_EXPLOIT),
+        state.red_activity_this_step,
+    )
+
+    return state.replace(
+        red_privilege=red_privilege,
+        host_compromised=host_compromised,
+        red_activity_this_step=activity,
+    )
+
+
 _EXPLOIT_DISPATCH = (
     (ACTION_TYPE_EXPLOIT_SSH, _apply_exploit_ssh),
     (ACTION_TYPE_EXPLOIT_FTP, _apply_exploit_ftp),
@@ -433,6 +481,13 @@ def apply_red_action(
             lambda s: s,
             state,
         )
+
+    state = jax.lax.cond(
+        action_type == ACTION_TYPE_PRIVESC,
+        lambda s: _apply_privesc(s, const, agent_id, target_host),
+        lambda s: s,
+        state,
+    )
 
     return state
 
