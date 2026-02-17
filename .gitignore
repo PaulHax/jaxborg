@@ -7,4 +7,3 @@ build/
 .venv/
 *.egg
 .pytest_cache/
-uv.lock
