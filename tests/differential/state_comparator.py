@@ -1,4 +1,4 @@
-from tests.differential.harness import StateSnapshot, StateDiff
+from tests.differential.harness import StateDiff, StateSnapshot
 
 
 def compare_snapshots(cyborg: StateSnapshot, jax: StateSnapshot) -> list[StateDiff]:

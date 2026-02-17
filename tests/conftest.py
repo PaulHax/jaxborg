@@ -4,6 +4,7 @@ import pytest
 def _cyborg_available():
     try:
         from CybORG import CybORG  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -18,7 +19,7 @@ cyborg_required = pytest.mark.skipif(
 @pytest.fixture
 def cyborg_env():
     from CybORG import CybORG
-    from CybORG.Agents import SleepAgent, EnterpriseGreenAgent, FiniteStateRedAgent
+    from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
     from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
     sg = EnterpriseScenarioGenerator(

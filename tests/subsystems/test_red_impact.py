@@ -1,38 +1,37 @@
-import numpy as np
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
+from jaxborg.actions import apply_red_action
+from jaxborg.actions.encoding import (
+    ACTION_TYPE_IMPACT,
+    RED_IMPACT_END,
+    RED_IMPACT_START,
+    RED_PRIVESC_END,
+    decode_red_action,
+    encode_red_action,
+)
 from jaxborg.constants import (
+    ACTIVITY_EXPLOIT,
+    ACTIVITY_NONE,
+    COMPROMISE_PRIVILEGED,
+    COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
     NUM_RED_AGENTS,
     SERVICE_IDS,
-    ACTIVITY_NONE,
-    ACTIVITY_EXPLOIT,
-    COMPROMISE_NONE,
-    COMPROMISE_USER,
-    COMPROMISE_PRIVILEGED,
 )
-from jaxborg.state import CC4State, CC4Const, create_initial_state
-from jaxborg.topology import build_topology, CYBORG_SUFFIX_TO_ID
-from jaxborg.actions import (
-    encode_red_action,
-    decode_red_action,
-    apply_red_action,
-    RED_IMPACT_START,
-    RED_IMPACT_END,
-    RED_PRIVESC_END,
-    ACTION_TYPE_IMPACT,
-)
-
+from jaxborg.state import create_initial_state
+from jaxborg.topology import build_topology
 
 try:
     from CybORG import CybORG
     from CybORG.Agents import SleepAgent
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-    from CybORG.Simulator.Actions import Impact
-    from CybORG.Shared.Session import RedAbstractSession
     from CybORG.Shared.Enums import ProcessName
+    from CybORG.Shared.Session import RedAbstractSession
+    from CybORG.Simulator.Actions import Impact
+    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
     HAS_CYBORG = True
 except ImportError:
     HAS_CYBORG = False
@@ -59,57 +58,52 @@ def _setup_privileged_state(jax_const, target_host):
     target_subnet = int(jax_const.host_subnet[target_host])
     discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
     state = apply_red_action(state, jax_const, 0, discover_idx)
-    state = state.replace(
-        red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-    )
+    state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
     scan_idx = encode_red_action("DiscoverNetworkServices", target_host, 0)
     state = apply_red_action(state, jax_const, 0, scan_idx)
-    state = state.replace(
-        red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-    )
+    state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
     exploit_idx = encode_red_action("ExploitRemoteService_cc4SSHBruteForce", target_host, 0)
     state = apply_red_action(state, jax_const, 0, exploit_idx)
-    state = state.replace(
-        red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-    )
+    state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
     privesc_idx = encode_red_action("PrivilegeEscalate", target_host, 0)
     state = apply_red_action(state, jax_const, 0, privesc_idx)
-    state = state.replace(
-        red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-    )
+    state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
     return state
 
 
 def _find_ot_host(jax_const):
     for h in range(jax_const.num_hosts):
-        if (jax_const.host_active[h]
-                and not jax_const.host_is_router[h]
-                and jax_const.initial_services[h, OT_SVC]
-                and jax_const.initial_services[h, SSH_SVC]
-                and jax_const.host_has_bruteforceable_user[h]
-                and h != int(jax_const.red_start_hosts[0])):
+        if (
+            jax_const.host_active[h]
+            and not jax_const.host_is_router[h]
+            and jax_const.initial_services[h, OT_SVC]
+            and jax_const.initial_services[h, SSH_SVC]
+            and jax_const.host_has_bruteforceable_user[h]
+            and h != int(jax_const.red_start_hosts[0])
+        ):
             return h
     return None
 
 
 def _find_non_ot_host(jax_const):
     for h in range(jax_const.num_hosts):
-        if (jax_const.host_active[h]
-                and not jax_const.host_is_router[h]
-                and not jax_const.initial_services[h, OT_SVC]
-                and jax_const.initial_services[h, SSH_SVC]
-                and jax_const.host_has_bruteforceable_user[h]
-                and h != int(jax_const.red_start_hosts[0])):
+        if (
+            jax_const.host_active[h]
+            and not jax_const.host_is_router[h]
+            and not jax_const.initial_services[h, OT_SVC]
+            and jax_const.initial_services[h, SSH_SVC]
+            and jax_const.host_has_bruteforceable_user[h]
+            and h != int(jax_const.red_start_hosts[0])
+        ):
             return h
     return None
 
 
 class TestImpactEncoding:
-
     def test_impact_range_starts_after_privesc(self):
         assert RED_IMPACT_START == RED_PRIVESC_END
 
@@ -131,7 +125,6 @@ class TestImpactEncoding:
 
 
 class TestApplyImpact:
-
     def test_impact_stops_ot_service(self, jax_const):
         target = _find_ot_host(jax_const)
         if target is None:
@@ -216,9 +209,7 @@ class TestApplyImpact:
         assert bool(state1.ot_service_stopped[target])
         assert not bool(state1.host_services[target, OT_SVC])
 
-        state1 = state1.replace(
-            red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-        )
+        state1 = state1.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
         state2 = apply_red_action(state1, jax_const, 0, action_idx)
         assert int(state2.red_activity_this_step[target]) == ACTIVITY_NONE
 
@@ -270,7 +261,6 @@ class TestApplyImpact:
 
 
 class TestImpactChain:
-
     def test_full_killchain_with_impact(self, jax_const):
         target = _find_ot_host(jax_const)
         if target is None:
@@ -293,7 +283,6 @@ class TestImpactChain:
 
 @cyborg_required
 class TestDifferentialWithCybORG:
-
     @pytest.fixture
     def cyborg_env(self):
         sg = EnterpriseScenarioGenerator(
@@ -307,6 +296,7 @@ class TestDifferentialWithCybORG:
     @pytest.fixture
     def cyborg_and_jax(self, cyborg_env):
         from jaxborg.topology import build_const_from_cyborg
+
         const = build_const_from_cyborg(cyborg_env)
         state = create_initial_state()
         state = state.replace(host_services=jnp.array(const.initial_services))
@@ -322,8 +312,13 @@ class TestDifferentialWithCybORG:
         target_hostname = sorted_hosts[target_h]
 
         session = RedAbstractSession(
-            hostname=target_hostname, username="root", agent="red_agent_0",
-            parent=0, session_type=None, ident=None, pid=None,
+            hostname=target_hostname,
+            username="root",
+            agent="red_agent_0",
+            parent=0,
+            session_type=None,
+            ident=None,
+            pid=None,
         )
         cyborg_state.add_session(session)
 
@@ -339,18 +334,18 @@ class TestDifferentialWithCybORG:
 
     def _find_ot_host_idx(self, const):
         for h in range(const.num_hosts):
-            if (const.host_active[h]
-                    and not const.host_is_router[h]
-                    and const.initial_services[h, OT_SVC]):
+            if const.host_active[h] and not const.host_is_router[h] and const.initial_services[h, OT_SVC]:
                 return h
         return None
 
     def _find_non_ot_host_idx(self, const):
         for h in range(const.num_hosts):
-            if (const.host_active[h]
-                    and not const.host_is_router[h]
-                    and not const.initial_services[h, OT_SVC]
-                    and h != int(const.red_start_hosts[0])):
+            if (
+                const.host_active[h]
+                and not const.host_is_router[h]
+                and not const.initial_services[h, OT_SVC]
+                and h != int(const.red_start_hosts[0])
+            ):
                 return h
         return None
 
@@ -361,9 +356,7 @@ class TestDifferentialWithCybORG:
         target_h = self._find_ot_host_idx(const)
         assert target_h is not None, "No OT host found"
 
-        state, target_hostname = self._inject_privileged_session(
-            cyborg_env, const, state, target_h
-        )
+        state, target_hostname = self._inject_privileged_session(cyborg_env, const, state, target_h)
 
         impact = Impact(hostname=target_hostname, session=0, agent="red_agent_0")
         cyborg_obs = impact.execute(cyborg_state)
@@ -376,8 +369,7 @@ class TestDifferentialWithCybORG:
         jax_svc_off = not bool(new_state.host_services[target_h, OT_SVC])
 
         assert jax_stopped == cyborg_success, (
-            f"JAX ot_stopped={jax_stopped} but CybORG success={cyborg_success} "
-            f"for host {target_h} ({target_hostname})"
+            f"JAX ot_stopped={jax_stopped} but CybORG success={cyborg_success} for host {target_h} ({target_hostname})"
         )
         assert jax_svc_off == cyborg_success
 
@@ -388,14 +380,11 @@ class TestDifferentialWithCybORG:
         target_h = self._find_ot_host_idx(const)
         assert target_h is not None, "No OT host found"
 
-        state, target_hostname = self._inject_privileged_session(
-            cyborg_env, const, state, target_h
-        )
+        state, target_hostname = self._inject_privileged_session(cyborg_env, const, state, target_h)
 
         cyborg_host = cyborg_state.hosts[target_hostname]
         cyborg_ot_before = any(
-            svc.active for sname, svc in cyborg_host.services.items()
-            if sname == ProcessName.OTSERVICE
+            svc.active for sname, svc in cyborg_host.services.items() if sname == ProcessName.OTSERVICE
         )
         jax_ot_before = bool(state.host_services[target_h, OT_SVC])
         assert jax_ot_before == cyborg_ot_before
@@ -407,14 +396,11 @@ class TestDifferentialWithCybORG:
         new_state = apply_red_action(state, const, 0, impact_idx)
 
         cyborg_ot_after = any(
-            svc.active for sname, svc in cyborg_host.services.items()
-            if sname == ProcessName.OTSERVICE
+            svc.active for sname, svc in cyborg_host.services.items() if sname == ProcessName.OTSERVICE
         )
         jax_ot_after = bool(new_state.host_services[target_h, OT_SVC])
 
-        assert jax_ot_after == cyborg_ot_after, (
-            f"JAX OT active={jax_ot_after} but CybORG OT active={cyborg_ot_after}"
-        )
+        assert jax_ot_after == cyborg_ot_after, f"JAX OT active={jax_ot_after} but CybORG OT active={cyborg_ot_after}"
 
     def test_impact_fails_without_session_matches_cyborg(self, cyborg_and_jax):
         cyborg_env, const, state = cyborg_and_jax
@@ -427,14 +413,14 @@ class TestDifferentialWithCybORG:
 
         impact = Impact(hostname=target_hostname, session=0, agent="red_agent_0")
         cyborg_obs = impact.execute(cyborg_state)
-        cyborg_success = cyborg_obs.success
+        cyborg_success = cyborg_obs.success == True  # noqa: E712
 
         impact_idx = encode_red_action("Impact", target_h, 0)
         new_state = apply_red_action(state, const, 0, impact_idx)
         jax_stopped = bool(new_state.ot_service_stopped[target_h])
 
-        assert jax_stopped == False
-        assert cyborg_success == False
+        assert not jax_stopped
+        assert not cyborg_success
 
     def test_impact_fails_on_non_ot_host_matches_cyborg(self, cyborg_and_jax):
         cyborg_env, const, state = cyborg_and_jax
@@ -444,19 +430,17 @@ class TestDifferentialWithCybORG:
         if target_h is None:
             pytest.skip("No non-OT host found")
 
-        state, target_hostname = self._inject_privileged_session(
-            cyborg_env, const, state, target_h
-        )
+        state, target_hostname = self._inject_privileged_session(cyborg_env, const, state, target_h)
 
         impact = Impact(hostname=target_hostname, session=0, agent="red_agent_0")
         cyborg_obs = impact.execute(cyborg_state)
-        cyborg_success = cyborg_obs.success
+        cyborg_success = cyborg_obs.success == True  # noqa: E712
 
         impact_idx = encode_red_action("Impact", target_h, 0)
         new_state = apply_red_action(state, const, 0, impact_idx)
         jax_stopped = bool(new_state.ot_service_stopped[target_h])
 
-        assert jax_stopped == cyborg_success == False
+        assert not jax_stopped and not cyborg_success
 
     def test_impact_fails_with_user_priv_matches_cyborg(self, cyborg_and_jax):
         cyborg_env, const, state = cyborg_and_jax
@@ -468,8 +452,13 @@ class TestDifferentialWithCybORG:
         target_hostname = sorted_hosts[target_h]
 
         user_session = RedAbstractSession(
-            hostname=target_hostname, username="ubuntu", agent="red_agent_0",
-            parent=0, session_type=None, ident=None, pid=None,
+            hostname=target_hostname,
+            username="ubuntu",
+            agent="red_agent_0",
+            parent=0,
+            session_type=None,
+            ident=None,
+            pid=None,
         )
         cyborg_state.add_session(user_session)
 
@@ -479,15 +468,15 @@ class TestDifferentialWithCybORG:
 
         impact = Impact(hostname=target_hostname, session=0, agent="red_agent_0")
         cyborg_obs = impact.execute(cyborg_state)
-        cyborg_success = cyborg_obs.success
+        cyborg_success = cyborg_obs.success == True  # noqa: E712
 
         impact_idx = encode_red_action("Impact", target_h, 0)
         new_state = apply_red_action(state, const, 0, impact_idx)
         jax_stopped = bool(new_state.ot_service_stopped[target_h])
         jax_svc_still_on = bool(new_state.host_services[target_h, OT_SVC])
 
-        assert jax_stopped == cyborg_success == False
-        assert jax_svc_still_on == True
+        assert not jax_stopped and not cyborg_success
+        assert jax_svc_still_on
 
     def test_repeated_impact_matches_cyborg(self, cyborg_and_jax):
         cyborg_env, const, state = cyborg_and_jax
@@ -496,36 +485,27 @@ class TestDifferentialWithCybORG:
         target_h = self._find_ot_host_idx(const)
         assert target_h is not None
 
-        state, target_hostname = self._inject_privileged_session(
-            cyborg_env, const, state, target_h
-        )
+        state, target_hostname = self._inject_privileged_session(cyborg_env, const, state, target_h)
 
         impact = Impact(hostname=target_hostname, session=0, agent="red_agent_0")
         cyborg_obs1 = impact.execute(cyborg_state)
-        assert cyborg_obs1.success == True
+        assert cyborg_obs1.success
 
         impact_idx = encode_red_action("Impact", target_h, 0)
         state = apply_red_action(state, const, 0, impact_idx)
         assert bool(state.ot_service_stopped[target_h])
         assert not bool(state.host_services[target_h, OT_SVC])
 
-        state = state.replace(
-            red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-        )
+        state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
-        cyborg_obs2 = impact.execute(cyborg_state)
-        cyborg_success2 = cyborg_obs2.success
+        impact.execute(cyborg_state)
 
         state2 = apply_red_action(state, const, 0, impact_idx)
-        jax_changed = (
-            bool(state2.host_services[target_h, OT_SVC])
-            != bool(state.host_services[target_h, OT_SVC])
-        )
+        bool(state2.host_services[target_h, OT_SVC]) != bool(state.host_services[target_h, OT_SVC])
 
         cyborg_host = cyborg_state.hosts[target_hostname]
         cyborg_ot_after2 = any(
-            svc.active for sname, svc in cyborg_host.services.items()
-            if sname == ProcessName.OTSERVICE
+            svc.active for sname, svc in cyborg_host.services.items() if sname == ProcessName.OTSERVICE
         )
         jax_ot_after2 = bool(state2.host_services[target_h, OT_SVC])
 

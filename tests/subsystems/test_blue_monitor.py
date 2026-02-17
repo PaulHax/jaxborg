@@ -1,42 +1,36 @@
-import numpy as np
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
+from jaxborg.actions import apply_blue_action, apply_red_action
+from jaxborg.actions.blue_monitor import apply_blue_monitor
+from jaxborg.actions.encoding import (
+    BLUE_ACTION_TYPE_MONITOR,
+    BLUE_ACTION_TYPE_SLEEP,
+    BLUE_MONITOR,
+    BLUE_SLEEP,
+    decode_blue_action,
+    encode_blue_action,
+    encode_red_action,
+)
 from jaxborg.constants import (
+    ACTIVITY_NONE,
+    ACTIVITY_SCAN,
     GLOBAL_MAX_HOSTS,
     NUM_BLUE_AGENTS,
     SERVICE_IDS,
-    ACTIVITY_NONE,
-    ACTIVITY_SCAN,
-    ACTIVITY_EXPLOIT,
-    COMPROMISE_NONE,
-    COMPROMISE_USER,
-    COMPROMISE_PRIVILEGED,
 )
-from jaxborg.state import CC4State, CC4Const, create_initial_state
+from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
-from jaxborg.actions import (
-    encode_red_action,
-    apply_red_action,
-    apply_blue_monitor,
-    encode_blue_action,
-    decode_blue_action,
-    apply_blue_action,
-    BLUE_SLEEP,
-    BLUE_MONITOR,
-    BLUE_ACTION_TYPE_SLEEP,
-    BLUE_ACTION_TYPE_MONITOR,
-)
-
 
 try:
     from CybORG import CybORG
     from CybORG.Agents import SleepAgent
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
     from CybORG.Simulator.Actions.AbstractActions.Monitor import Monitor
     from CybORG.Simulator.Actions.ConcreteActions.Portscan import Portscan
-    from CybORG.Shared.Session import RedAbstractSession
+    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
     HAS_CYBORG = True
 except ImportError:
     HAS_CYBORG = False
@@ -100,6 +94,7 @@ def _cyborg_portscan(cyborg_env, target_hostname):
 
 def _find_host_in_subnet(const, subnet_name, exclude_router=True):
     from jaxborg.constants import SUBNET_IDS
+
     sid = SUBNET_IDS[subnet_name]
     for h in range(int(const.num_hosts)):
         if not bool(const.host_active[h]):
@@ -113,7 +108,6 @@ def _find_host_in_subnet(const, subnet_name, exclude_router=True):
 
 
 class TestBlueActionEncoding:
-
     def test_encode_sleep(self):
         assert encode_blue_action("Sleep", -1, 0) == BLUE_SLEEP
 
@@ -130,7 +124,6 @@ class TestBlueActionEncoding:
 
 
 class TestApplyBlueAction:
-
     def test_sleep_is_noop(self, jax_const):
         state = _make_jax_state(jax_const)
         new_state = apply_blue_action(state, jax_const, 0, BLUE_SLEEP)
@@ -149,7 +142,6 @@ class TestApplyBlueAction:
 
 
 class TestApplyBlueMonitor:
-
     def test_no_activity_no_detection(self, jax_const):
         state = _make_jax_state(jax_const)
         new_state = apply_blue_monitor(state, jax_const)
@@ -209,7 +201,6 @@ class TestApplyBlueMonitor:
 
 @cyborg_required
 class TestDifferentialWithCybORG:
-
     @pytest.fixture
     def cyborg_env(self):
         return _make_cyborg_env()
@@ -242,16 +233,11 @@ class TestDifferentialWithCybORG:
         state = apply_red_action(state, const, 0, scan_idx)
         state = apply_blue_monitor(state, const)
 
-        jax_detected = {
-            int(h) for h in range(int(const.num_hosts))
-            if bool(state.host_activity_detected[h])
-        }
+        jax_detected = {int(h) for h in range(int(const.num_hosts)) if bool(state.host_activity_detected[h])}
 
         cyborg_has_target = target_h in cyborg_detected
         jax_has_target = target_h in jax_detected
-        assert cyborg_has_target == jax_has_target, (
-            f"CybORG detected target={cyborg_has_target}, JAX={jax_has_target}"
-        )
+        assert cyborg_has_target == jax_has_target, f"CybORG detected target={cyborg_has_target}, JAX={jax_has_target}"
 
     def test_no_activity_no_detection_matches_cyborg(self, cyborg_and_jax):
         """No red activity: neither CybORG nor JAX detect anything."""
@@ -260,10 +246,7 @@ class TestDifferentialWithCybORG:
         cyborg_detected = _cyborg_monitor_detected_hosts(cyborg_env)
 
         state = apply_blue_monitor(state, const)
-        jax_detected = {
-            int(h) for h in range(int(const.num_hosts))
-            if bool(state.host_activity_detected[h])
-        }
+        jax_detected = {int(h) for h in range(int(const.num_hosts)) if bool(state.host_activity_detected[h])}
 
         assert len(cyborg_detected) == 0, f"CybORG detected: {cyborg_detected}"
         assert len(jax_detected) == 0, f"JAX detected: {jax_detected}"
@@ -288,7 +271,7 @@ class TestDifferentialWithCybORG:
         jax_detected_on_target = bool(state.host_activity_detected[target_h])
         cyborg_detected_on_target = target_h in cyborg_detected
 
-        assert cyborg_detected_on_target == jax_detected_on_target == False, (
+        assert not cyborg_detected_on_target and not jax_detected_on_target, (
             f"CybORG={cyborg_detected_on_target}, JAX={jax_detected_on_target}"
         )
 
@@ -321,9 +304,7 @@ class TestDifferentialWithCybORG:
             target_subnet = int(const.host_subnet[h])
             discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
             state = apply_red_action(state, const, 0, discover_idx)
-            state = state.replace(
-                red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-            )
+            state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
         for subnet, h in targets.items():
             scan_idx = encode_red_action("DiscoverNetworkServices", h, 0)
@@ -334,9 +315,7 @@ class TestDifferentialWithCybORG:
         for subnet, h in targets.items():
             cyborg_has = h in cyborg_detected
             jax_has = bool(state.host_activity_detected[h])
-            assert cyborg_has == jax_has, (
-                f"Subnet {subnet} host {h}: CybORG={cyborg_has}, JAX={jax_has}"
-            )
+            assert cyborg_has == jax_has, f"Subnet {subnet} host {h}: CybORG={cyborg_has}, JAX={jax_has}"
 
     def test_exploit_activity_detection_matches_cyborg(self, cyborg_and_jax):
         """Exploit activity on monitored host: both detect it."""
@@ -346,30 +325,27 @@ class TestDifferentialWithCybORG:
 
         target_h = None
         for h in range(int(const.num_hosts)):
-            if (bool(const.host_active[h])
-                    and not bool(const.host_is_router[h])
-                    and bool(const.initial_services[h, SSH_SVC])
-                    and bool(const.host_has_bruteforceable_user[h])
-                    and h != int(const.red_start_hosts[0])
-                    and bool(jnp.any(const.blue_agent_hosts[:, h]))):
+            if (
+                bool(const.host_active[h])
+                and not bool(const.host_is_router[h])
+                and bool(const.initial_services[h, SSH_SVC])
+                and bool(const.host_has_bruteforceable_user[h])
+                and h != int(const.red_start_hosts[0])
+                and bool(jnp.any(const.blue_agent_hosts[:, h]))
+            ):
                 target_h = h
                 break
         assert target_h is not None, "No exploitable monitored host found"
         target_hostname = sorted_hosts[target_h]
 
-        target_ip = next(
-            ip for ip, hname in cyborg_state.ip_addresses.items()
-            if hname == target_hostname
-        )
+        target_ip = next(ip for ip, hname in cyborg_state.ip_addresses.items() if hname == target_hostname)
         from CybORG.Simulator.Actions.ConcreteActions.ExploitActions.SSHBruteForce import SSHBruteForce
+
         exploit = SSHBruteForce(session=0, agent="red_agent_0", ip_address=target_ip)
-        exploit_obs = exploit.execute(cyborg_state)
+        exploit.execute(cyborg_state)
 
         host_obj = cyborg_state.hosts[target_hostname]
-        cyborg_has_events = (
-            len(host_obj.events.network_connections) > 0
-            or len(host_obj.events.process_creation) > 0
-        )
+        cyborg_has_events = len(host_obj.events.network_connections) > 0 or len(host_obj.events.process_creation) > 0
 
         cyborg_detected = _cyborg_monitor_detected_hosts(cyborg_env)
         cyborg_has_target = target_h in cyborg_detected
@@ -377,18 +353,14 @@ class TestDifferentialWithCybORG:
         target_subnet = int(const.host_subnet[target_h])
         discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
         state = apply_red_action(state, const, 0, discover_idx)
-        state = state.replace(
-            red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-        )
+        state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
         scan_idx = encode_red_action("DiscoverNetworkServices", target_h, 0)
         state = apply_red_action(state, const, 0, scan_idx)
-        state = state.replace(
-            red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-        )
+        state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
         exploit_idx = encode_red_action("ExploitRemoteService_cc4SSHBruteForce", target_h, 0)
         state = apply_red_action(state, const, 0, exploit_idx)
 
-        jax_has_activity = int(state.red_activity_this_step[target_h]) != ACTIVITY_NONE
+        int(state.red_activity_this_step[target_h]) != ACTIVITY_NONE
 
         state = apply_blue_monitor(state, const)
         jax_has_target = bool(state.host_activity_detected[target_h])
@@ -409,13 +381,9 @@ class TestDifferentialWithCybORG:
             session = cyborg_state.sessions[agent_name][0]
             children = list(session.children.values()) + [session]
             cyborg_hosts = {sorted_hosts.index(c.hostname) for c in children}
-            jax_hosts = {
-                int(h) for h in range(int(const.num_hosts))
-                if bool(const.blue_agent_hosts[blue_idx, h])
-            }
+            jax_hosts = {int(h) for h in range(int(const.num_hosts)) if bool(const.blue_agent_hosts[blue_idx, h])}
             assert cyborg_hosts == jax_hosts, (
-                f"{agent_name}: CybORG covers {len(cyborg_hosts)} hosts, "
-                f"JAX covers {len(jax_hosts)} hosts"
+                f"{agent_name}: CybORG covers {len(cyborg_hosts)} hosts, JAX covers {len(jax_hosts)} hosts"
             )
 
     def test_monitor_clears_nothing_in_jax(self, cyborg_and_jax):

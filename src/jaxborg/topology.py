@@ -4,20 +4,16 @@ import numpy as np
 
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
-    NUM_SUBNETS,
+    MISSION_PHASES,
     NUM_BLUE_AGENTS,
     NUM_RED_AGENTS,
-    NUM_SERVICES,
-    MISSION_PHASES,
-    SUBNET_NAMES,
-    SUBNET_IDS,
-    SERVICE_NAMES,
+    NUM_SUBNETS,
     SERVICE_IDS,
-    MIN_HOSTS_PER_SUBNET,
-    MAX_HOSTS_PER_SUBNET,
+    SERVICE_NAMES,
+    SUBNET_IDS,
+    SUBNET_NAMES,
 )
 from jaxborg.state import CC4Const
-
 
 CYBORG_SUBNET_SUFFIX = {
     "RESTRICTED_ZONE_A": "restricted_zone_a_subnet",
@@ -265,9 +261,7 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
         green_count += 1
 
     phase_boundaries = _compute_phase_boundaries(scenario.mission_phases)
-    allowed_subnet_pairs = _compute_allowed_subnet_pairs(
-        scenario.allowed_subnets_per_mphase
-    )
+    allowed_subnet_pairs = _compute_allowed_subnet_pairs(scenario.allowed_subnets_per_mphase)
 
     return CC4Const(
         host_active=jnp.array(host_active),
@@ -296,9 +290,7 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
     )
 
 
-def _fill_data_links_from_cyborg(
-    links: np.ndarray, state, hostname_to_idx: dict
-) -> None:
+def _fill_data_links_from_cyborg(links: np.ndarray, state, hostname_to_idx: dict) -> None:
     """Overwrite data_links from CybORG's actual interface data_links."""
     links[:] = False
     for hostname, host in state.hosts.items():
@@ -344,7 +336,7 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
     1 router + random user hosts (3-10) + random server hosts (1-6).
     Internet subnet gets 1 host (root_internet_host_0).
     """
-    rng = np.random.default_rng(int(key[0]) if hasattr(key, '__getitem__') else int(key))
+    rng = np.random.default_rng(int(key[0]) if hasattr(key, "__getitem__") else int(key))
 
     host_active = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
     host_subnet_arr = np.zeros(GLOBAL_MAX_HOSTS, dtype=np.int32)
@@ -420,9 +412,7 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
 
     num_hosts = host_idx
 
-    data_links = _build_data_links(
-        host_subnet_arr, host_is_router, num_hosts, subnet_router_idx
-    )
+    data_links = _build_data_links(host_subnet_arr, host_is_router, num_hosts, subnet_router_idx)
 
     subnet_adjacency = _subnet_nacl_adjacency()
 
@@ -440,7 +430,8 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
     red_agent_active = np.zeros(NUM_RED_AGENTS, dtype=bool)
     for i, snames in enumerate(RED_AGENT_SUBNETS):
         non_router_hosts = [
-            h for h in range(num_hosts)
+            h
+            for h in range(num_hosts)
             if host_active[h]
             and SUBNET_NAMES[int(host_subnet_arr[h])] in snames
             and not host_is_router[h]
@@ -460,9 +451,7 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
             green_agent_active[h] = True
             green_count += 1
 
-    phase_boundaries = _compute_phase_boundaries(
-        _compute_mission_phases(num_steps)
-    )
+    phase_boundaries = _compute_phase_boundaries(_compute_mission_phases(num_steps))
     allowed_subnet_pairs = _build_allowed_subnet_pairs_pure()
 
     return CC4Const(

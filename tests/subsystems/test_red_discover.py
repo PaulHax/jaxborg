@@ -1,35 +1,32 @@
-import numpy as np
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
-from jaxborg.constants import (
-    GLOBAL_MAX_HOSTS,
-    NUM_SUBNETS,
-    NUM_RED_AGENTS,
-    SUBNET_NAMES,
-    SUBNET_IDS,
-    ACTIVITY_NONE,
-    ACTIVITY_SCAN,
-)
-from jaxborg.state import CC4State, CC4Const, create_initial_state
-from jaxborg.topology import build_topology, CYBORG_SUFFIX_TO_ID
-from jaxborg.actions import (
-    encode_red_action,
-    decode_red_action,
-    apply_red_action,
-    RED_SLEEP,
+from jaxborg.actions import apply_red_action
+from jaxborg.actions.encoding import (
     RED_DISCOVER_START,
-    RED_DISCOVER_END,
-    _has_any_session,
+    RED_SLEEP,
+    decode_red_action,
+    encode_red_action,
 )
-
+from jaxborg.actions.red_common import has_any_session
+from jaxborg.constants import (
+    ACTIVITY_SCAN,
+    GLOBAL_MAX_HOSTS,
+    NUM_RED_AGENTS,
+    NUM_SUBNETS,
+    SUBNET_IDS,
+)
+from jaxborg.state import create_initial_state
+from jaxborg.topology import CYBORG_SUFFIX_TO_ID, build_topology
 
 try:
     from CybORG import CybORG
-    from CybORG.Agents import SleepAgent, EnterpriseGreenAgent, FiniteStateRedAgent
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+    from CybORG.Agents import SleepAgent
     from CybORG.Simulator.Actions import DiscoverRemoteSystems
+    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
     HAS_CYBORG = True
 except ImportError:
     HAS_CYBORG = False
@@ -51,7 +48,6 @@ def jax_state(jax_const):
 
 
 class TestEncoding:
-
     def test_sleep_encodes_to_zero(self):
         assert encode_red_action("Sleep", 0, 0) == RED_SLEEP
 
@@ -76,18 +72,16 @@ class TestEncoding:
 
 
 class TestHasAnySession:
-
     def test_has_session(self, jax_const, jax_state):
         session_hosts = jax_state.red_sessions[0]
-        assert bool(_has_any_session(session_hosts, jax_const))
+        assert bool(has_any_session(session_hosts, jax_const))
 
     def test_no_session(self, jax_const):
         empty_sessions = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
-        assert not bool(_has_any_session(empty_sessions, jax_const))
+        assert not bool(has_any_session(empty_sessions, jax_const))
 
 
 class TestApplyDiscover:
-
     def test_sleep_no_state_change(self, jax_const, jax_state):
         new_state = apply_red_action(jax_state, jax_const, 0, RED_SLEEP)
         np.testing.assert_array_equal(
@@ -202,7 +196,6 @@ class TestApplyDiscover:
 
 @cyborg_required
 class TestDifferentialWithCybORG:
-
     @pytest.fixture
     def cyborg_env(self):
         sg = EnterpriseScenarioGenerator(
@@ -216,6 +209,7 @@ class TestDifferentialWithCybORG:
     @pytest.fixture
     def cyborg_and_jax(self, cyborg_env):
         from jaxborg.topology import build_const_from_cyborg
+
         const = build_const_from_cyborg(cyborg_env)
         state = create_initial_state()
         start_host = int(const.red_start_hosts[0])
@@ -251,15 +245,12 @@ class TestDifferentialWithCybORG:
         sorted_hosts = sorted(cyborg_state.hosts.keys())
         jax_discovered = np.array(jax_new_state.red_discovered_hosts[0])
 
-        jax_discovered_hostnames = {
-            sorted_hosts[h]
-            for h in range(const.num_hosts)
-            if jax_discovered[h]
-        }
+        jax_discovered_hostnames = {sorted_hosts[h] for h in range(const.num_hosts) if jax_discovered[h]}
 
         cyborg_discovered_hostnames = set()
         for ip_str in cyborg_discovered_ips:
             from ipaddress import IPv4Address
+
             ip = IPv4Address(ip_str)
             if ip in cyborg_state.ip_addresses:
                 cyborg_discovered_hostnames.add(cyborg_state.ip_addresses[ip])
@@ -278,6 +269,7 @@ class TestDifferentialWithCybORG:
         sid = CYBORG_SUFFIX_TO_ID[subnet_name]
 
         from CybORG.Simulator.Actions.ConcreteActions.Pingsweep import Pingsweep
+
         ps = Pingsweep(session=0, agent="red_agent_0", subnet=subnet_cidr)
         obs = ps.execute(cyborg_state)
 
@@ -286,6 +278,7 @@ class TestDifferentialWithCybORG:
             if key == "success":
                 continue
             from ipaddress import IPv4Address
+
             ip = IPv4Address(key)
             if ip in cyborg_state.ip_addresses:
                 cyborg_discovered_hostnames.add(cyborg_state.ip_addresses[ip])
@@ -295,11 +288,7 @@ class TestDifferentialWithCybORG:
 
         sorted_hosts = sorted(cyborg_state.hosts.keys())
         jax_discovered = np.array(jax_new_state.red_discovered_hosts[0])
-        jax_discovered_hostnames = {
-            sorted_hosts[h]
-            for h in range(const.num_hosts)
-            if jax_discovered[h]
-        }
+        jax_discovered_hostnames = {sorted_hosts[h] for h in range(const.num_hosts) if jax_discovered[h]}
 
         assert jax_discovered_hostnames == cyborg_discovered_hostnames, (
             f"JAX: {jax_discovered_hostnames}, CybORG: {cyborg_discovered_hostnames}"

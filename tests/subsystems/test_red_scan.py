@@ -1,38 +1,34 @@
-import numpy as np
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
-from jaxborg.constants import (
-    GLOBAL_MAX_HOSTS,
-    NUM_SUBNETS,
-    NUM_RED_AGENTS,
-    SUBNET_NAMES,
-    SUBNET_IDS,
-    ACTIVITY_NONE,
-    ACTIVITY_SCAN,
-)
-from jaxborg.state import CC4State, CC4Const, create_initial_state
-from jaxborg.topology import build_topology, CYBORG_SUFFIX_TO_ID
-from jaxborg.actions import (
-    encode_red_action,
-    decode_red_action,
-    apply_red_action,
-    _can_reach_subnet,
-    RED_SCAN_START,
-    RED_SCAN_END,
+from jaxborg.actions import apply_red_action
+from jaxborg.actions.encoding import (
     ACTION_TYPE_SCAN,
+    RED_SCAN_START,
+    decode_red_action,
+    encode_red_action,
 )
-
+from jaxborg.actions.red_common import can_reach_subnet
+from jaxborg.constants import (
+    ACTIVITY_SCAN,
+    GLOBAL_MAX_HOSTS,
+    NUM_RED_AGENTS,
+    NUM_SUBNETS,
+)
+from jaxborg.state import create_initial_state
+from jaxborg.topology import CYBORG_SUFFIX_TO_ID, build_topology
 
 try:
     from CybORG import CybORG
     from CybORG.Agents import SleepAgent
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
     from CybORG.Simulator.Actions import DiscoverRemoteSystems
     from CybORG.Simulator.Actions.AbstractActions.DiscoverNetworkServices import (
         AggressiveServiceDiscovery,
     )
+    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
     HAS_CYBORG = True
 except ImportError:
     HAS_CYBORG = False
@@ -55,9 +51,7 @@ def jax_state_with_discovered(jax_const):
     start_subnet = int(jax_const.host_subnet[start_host])
     discover_idx = encode_red_action("DiscoverRemoteSystems", start_subnet, 0)
     state = apply_red_action(state, jax_const, 0, discover_idx)
-    state = state.replace(
-        red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-    )
+    state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
     return state
 
 
@@ -70,7 +64,6 @@ def _first_discovered_non_router(jax_const, state, agent_id=0):
 
 
 class TestScanEncoding:
-
     def test_scan_encodes_per_host(self):
         for h in range(10):
             code = encode_red_action("DiscoverNetworkServices", h, 0)
@@ -85,21 +78,21 @@ class TestScanEncoding:
             assert int(target_host) == h
 
     def test_scan_range_does_not_overlap_discover(self):
-        from jaxborg.actions import RED_DISCOVER_END
+        from jaxborg.actions.encoding import RED_DISCOVER_END
+
         assert RED_SCAN_START == RED_DISCOVER_END
 
 
 class TestCanReachSubnet:
-
     def test_can_reach_own_subnet(self, jax_const, jax_state_with_discovered):
         state = jax_state_with_discovered
         start_host = int(jax_const.red_start_hosts[0])
         start_subnet = int(jax_const.host_subnet[start_host])
-        assert bool(_can_reach_subnet(state, jax_const, 0, start_subnet))
+        assert bool(can_reach_subnet(state, jax_const, 0, start_subnet))
 
     def test_cannot_reach_when_no_session(self, jax_const):
         state = create_initial_state()
-        assert not bool(_can_reach_subnet(state, jax_const, 0, 0))
+        assert not bool(can_reach_subnet(state, jax_const, 0, 0))
 
     def test_blocked_zone_prevents_reach(self, jax_const, jax_state_with_discovered):
         state = jax_state_with_discovered
@@ -110,15 +103,14 @@ class TestCanReachSubnet:
         blocked = state.blocked_zones.at[target_subnet, start_subnet].set(True)
         blocked_state = state.replace(blocked_zones=blocked)
 
-        can_reach_unblocked = bool(_can_reach_subnet(state, jax_const, 0, target_subnet))
-        can_reach_blocked = bool(_can_reach_subnet(blocked_state, jax_const, 0, target_subnet))
+        can_reach_unblocked = bool(can_reach_subnet(state, jax_const, 0, target_subnet))
+        can_reach_blocked = bool(can_reach_subnet(blocked_state, jax_const, 0, target_subnet))
 
         if can_reach_unblocked:
             assert not can_reach_blocked
 
 
 class TestApplyScan:
-
     def test_scan_discovered_host_marks_scanned(self, jax_const, jax_state_with_discovered):
         state = jax_state_with_discovered
         target = _first_discovered_non_router(jax_const, state)
@@ -223,8 +215,8 @@ class TestApplyScan:
         assert target is not None
 
         start_host = int(jax_const.red_start_hosts[0])
-        start_subnet = int(jax_const.host_subnet[start_host])
-        target_subnet = int(jax_const.host_subnet[target])
+        int(jax_const.host_subnet[start_host])
+        int(jax_const.host_subnet[target])
 
         blocked = jnp.ones((NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_)
         state_blocked = state.replace(blocked_zones=blocked)
@@ -247,7 +239,6 @@ class TestApplyScan:
 
 @cyborg_required
 class TestDifferentialWithCybORG:
-
     @pytest.fixture
     def cyborg_env(self):
         sg = EnterpriseScenarioGenerator(
@@ -261,6 +252,7 @@ class TestDifferentialWithCybORG:
     @pytest.fixture
     def cyborg_and_jax(self, cyborg_env):
         from jaxborg.topology import build_const_from_cyborg
+
         const = build_const_from_cyborg(cyborg_env)
         state = create_initial_state()
         start_host = int(const.red_start_hosts[0])
@@ -285,10 +277,7 @@ class TestDifferentialWithCybORG:
 
         sorted_hosts = sorted(cyborg_state.hosts.keys())
         discovered_jax = np.array(state.red_discovered_hosts[0])
-        discovered_hosts = [
-            h for h in range(const.num_hosts)
-            if discovered_jax[h] and not const.host_is_router[h]
-        ]
+        discovered_hosts = [h for h in range(const.num_hosts) if discovered_jax[h] and not const.host_is_router[h]]
         assert len(discovered_hosts) > 0
 
         target_h = discovered_hosts[0]
@@ -305,9 +294,7 @@ class TestDifferentialWithCybORG:
         cyborg_env.step(agent="red_agent_0", action=scan_action)
 
         scan_idx = encode_red_action("DiscoverNetworkServices", target_h, 0)
-        state = state.replace(
-            red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-        )
+        state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
         new_state = apply_red_action(state, const, 0, scan_idx)
 
         assert bool(new_state.red_scanned_hosts[0, target_h]), (

@@ -1,5 +1,3 @@
-import jax.numpy as jnp
-
 GLOBAL_MAX_HOSTS = 137
 NUM_SUBNETS = 9
 NUM_BLUE_AGENTS = 5

@@ -55,6 +55,10 @@ Every test must compare JAX output against CybORG. Pattern:
 
 Test infrastructure lives in `tests/differential/` (harness, action translator, state comparator).
 
+## Linting
+
+Run `uv run ruff check --fix . && uv run ruff format .` before committing.
+
 ## JAX Constraints
 
 - `jax.lax.cond()` for branching (no Python if/else in JIT code)
