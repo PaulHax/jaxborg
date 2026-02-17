@@ -282,7 +282,7 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
         green_agent_host=jnp.array(green_agent_host),
         green_agent_active=jnp.array(green_agent_active),
         num_green_agents=green_count,
-        phase_rewards=jnp.zeros((MISSION_PHASES, NUM_SUBNETS, 3), dtype=jnp.float32),
+        phase_rewards=jnp.array(_build_phase_rewards_from_cyborg(cyborg_env)),
         phase_boundaries=jnp.array(phase_boundaries),
         allowed_subnet_pairs=jnp.array(allowed_subnet_pairs),
         max_steps=500,
@@ -473,7 +473,7 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
         green_agent_host=jnp.array(green_agent_host),
         green_agent_active=jnp.array(green_agent_active),
         num_green_agents=green_count,
-        phase_rewards=jnp.zeros((MISSION_PHASES, NUM_SUBNETS, 3), dtype=jnp.float32),
+        phase_rewards=jnp.array(_build_phase_rewards()),
         phase_boundaries=jnp.array(phase_boundaries),
         allowed_subnet_pairs=jnp.array(allowed_subnet_pairs),
         max_steps=num_steps,
@@ -500,6 +500,62 @@ def _compute_mission_phases(steps: int) -> tuple:
     if remainder == 1:
         return (quotient + 1, quotient, quotient)
     return (quotient, quotient, quotient)
+
+
+def _build_phase_rewards() -> np.ndarray:
+    S = SUBNET_IDS
+    # (MISSION_PHASES, NUM_SUBNETS, 3) where columns are [LWF, ASF, RIA]
+    pr = np.zeros((MISSION_PHASES, NUM_SUBNETS, 3), dtype=np.float32)
+
+    # Phase 0 (Preplanning)
+    pr[0, S["RESTRICTED_ZONE_A"]] = [-1, -3, -1]
+    pr[0, S["OPERATIONAL_ZONE_A"]] = [-1, -1, -1]
+    pr[0, S["RESTRICTED_ZONE_B"]] = [-1, -3, -1]
+    pr[0, S["OPERATIONAL_ZONE_B"]] = [-1, -1, -1]
+    pr[0, S["CONTRACTOR_NETWORK"]] = [0, -5, -5]
+    pr[0, S["ADMIN_NETWORK"]] = [-1, -1, -3]
+    pr[0, S["OFFICE_NETWORK"]] = [-1, -1, -3]
+    pr[0, S["PUBLIC_ACCESS_ZONE"]] = [-1, -1, -3]
+    pr[0, S["INTERNET"]] = [0, 0, -1]
+
+    # Phase 1 (MissionA)
+    pr[1, S["RESTRICTED_ZONE_A"]] = [-2, -1, -3]
+    pr[1, S["OPERATIONAL_ZONE_A"]] = [-10, 0, -10]
+    pr[1, S["RESTRICTED_ZONE_B"]] = [-1, -1, -1]
+    pr[1, S["OPERATIONAL_ZONE_B"]] = [-1, -1, -1]
+    pr[1, S["CONTRACTOR_NETWORK"]] = [0, 0, 0]
+    pr[1, S["ADMIN_NETWORK"]] = [-1, -1, -3]
+    pr[1, S["OFFICE_NETWORK"]] = [-1, -1, -3]
+    pr[1, S["PUBLIC_ACCESS_ZONE"]] = [-1, -1, -3]
+    pr[1, S["INTERNET"]] = [0, 0, 0]
+
+    # Phase 2 (MissionB)
+    pr[2, S["RESTRICTED_ZONE_A"]] = [-1, -3, -3]
+    pr[2, S["OPERATIONAL_ZONE_A"]] = [-1, -1, -1]
+    pr[2, S["RESTRICTED_ZONE_B"]] = [-2, -1, -3]
+    pr[2, S["OPERATIONAL_ZONE_B"]] = [-10, 0, -10]
+    pr[2, S["CONTRACTOR_NETWORK"]] = [0, 0, 0]
+    pr[2, S["ADMIN_NETWORK"]] = [-1, -1, -3]
+    pr[2, S["OFFICE_NETWORK"]] = [-1, -1, -3]
+    pr[2, S["PUBLIC_ACCESS_ZONE"]] = [-1, -1, -3]
+    pr[2, S["INTERNET"]] = [0, 0, 0]
+
+    return pr
+
+
+def _build_phase_rewards_from_cyborg(cyborg_env) -> np.ndarray:
+    from CybORG.Shared.BlueRewardMachine import BlueRewardMachine
+
+    brm = BlueRewardMachine("")
+    pr = np.zeros((MISSION_PHASES, NUM_SUBNETS, 3), dtype=np.float32)
+    for phase in range(MISSION_PHASES):
+        table = brm.get_phase_rewards(phase)
+        for cyborg_name, rewards in table.items():
+            sid = CYBORG_SUFFIX_TO_ID[cyborg_name]
+            pr[phase, sid, 0] = rewards["LWF"]
+            pr[phase, sid, 1] = rewards["ASF"]
+            pr[phase, sid, 2] = rewards["RIA"]
+    return pr
 
 
 def _build_allowed_subnet_pairs_pure() -> np.ndarray:
