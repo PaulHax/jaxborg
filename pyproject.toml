@@ -1,0 +1,23 @@
+[project]
+name = "jaxborg"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "cyborg",
+    "hydra-core>=1.3.2",
+    "jaxmarl",
+    "omegaconf>=2.3.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jaxborg"]
+
+[tool.uv.sources]
+cyborg = { git = "https://github.com/PaulHax/cage-challenge-4.git", rev = "69ded9aa40b16ce87f7106fe961f68ad08d47176" }
+jaxmarl = { git = "https://github.com/FLAIROx/JaxMARL.git", branch = "main" }
