@@ -1,4 +1,84 @@
+import jax
+import jax.numpy as jnp
+import chex
+
+from jaxborg.constants import (
+    GLOBAL_MAX_HOSTS,
+    NUM_SUBNETS,
+    ACTIVITY_SCAN,
+)
 from jaxborg.state import CC4State, CC4Const
+
+RED_SLEEP = 0
+RED_DISCOVER_START = 1
+RED_DISCOVER_END = RED_DISCOVER_START + NUM_SUBNETS
+
+
+def encode_red_action(action_name: str, target: int, agent_id: int) -> int:
+    if action_name == "Sleep":
+        return RED_SLEEP
+    if action_name == "DiscoverRemoteSystems":
+        return RED_DISCOVER_START + target
+    raise NotImplementedError(f"Subsystem 3+: red action {action_name}")
+
+
+def decode_red_action(action_idx: int, agent_id: int, const: CC4Const):
+    is_discover = (action_idx >= RED_DISCOVER_START) & (action_idx < RED_DISCOVER_END)
+    action_type = jnp.where(is_discover, 1, 0)
+    target_subnet = jnp.where(is_discover, action_idx - RED_DISCOVER_START, -1)
+    return action_type, target_subnet
+
+
+def _has_any_session(
+    session_hosts: chex.Array,
+    const: CC4Const,
+) -> chex.Array:
+    """CC4's network is fully connected via routers; any session can reach any subnet."""
+    return jnp.any(session_hosts & const.host_active)
+
+
+def _apply_discover(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+    target_subnet: chex.Array,
+) -> CC4State:
+    """Pingsweep: discover all ping-responding hosts in target_subnet."""
+    session_hosts = state.red_sessions[agent_id]
+    can_reach = _has_any_session(session_hosts, const)
+
+    in_subnet = (const.host_subnet == target_subnet) & const.host_active
+    pingable = in_subnet & const.host_respond_to_ping
+    newly_discovered = pingable & can_reach
+
+    new_discovered = state.red_discovered_hosts[agent_id] | newly_discovered
+    red_discovered_hosts = state.red_discovered_hosts.at[agent_id].set(new_discovered)
+
+    activity = jnp.where(newly_discovered, ACTIVITY_SCAN, state.red_activity_this_step)
+    red_activity_this_step = jnp.where(can_reach, activity, state.red_activity_this_step)
+
+    return state.replace(
+        red_discovered_hosts=red_discovered_hosts,
+        red_activity_this_step=red_activity_this_step,
+    )
+
+
+def apply_red_action(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+    action_idx: int,
+) -> CC4State:
+    action_type, target_subnet = decode_red_action(action_idx, agent_id, const)
+
+    state = jax.lax.cond(
+        action_type == 1,
+        lambda s: _apply_discover(s, const, agent_id, target_subnet),
+        lambda s: s,
+        state,
+    )
+
+    return state
 
 
 def encode_blue_action(action_name: str, target_host: int, agent_id: int) -> int:
@@ -11,15 +91,3 @@ def decode_blue_action(action_idx: int, agent_id: int, const: CC4Const):
 
 def apply_blue_action(state: CC4State, const: CC4Const, agent_id: int, action_idx: int) -> CC4State:
     raise NotImplementedError("Subsystem 8+: blue action application")
-
-
-def encode_red_action(action_name: str, target_host: int, agent_id: int) -> int:
-    raise NotImplementedError("Subsystem 2+: red action encoding")
-
-
-def decode_red_action(action_idx: int, agent_id: int, const: CC4Const):
-    raise NotImplementedError("Subsystem 2+: red action decoding")
-
-
-def apply_red_action(state: CC4State, const: CC4Const, agent_id: int, action_idx: int) -> CC4State:
-    raise NotImplementedError("Subsystem 2+: red action application")
