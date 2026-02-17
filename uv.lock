@@ -1191,16 +1191,22 @@ name = "jaxborg"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "chex" },
     { name = "cyborg" },
+    { name = "flax" },
     { name = "hydra-core" },
+    { name = "jax" },
     { name = "jaxmarl" },
     { name = "omegaconf" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "chex" },
     { name = "cyborg", git = "https://github.com/PaulHax/cage-challenge-4.git?rev=69ded9aa40b16ce87f7106fe961f68ad08d47176" },
+    { name = "flax" },
     { name = "hydra-core", specifier = ">=1.3.2" },
+    { name = "jax" },
     { name = "jaxmarl", git = "https://github.com/FLAIROx/JaxMARL.git?branch=main" },
     { name = "omegaconf", specifier = ">=2.3.0" },
 ]
