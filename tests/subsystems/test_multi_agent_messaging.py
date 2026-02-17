@@ -7,7 +7,7 @@ from jaxborg.constants import (
     MESSAGE_LENGTH,
     NUM_BLUE_AGENTS,
 )
-from jaxborg.observations import get_blue_obs
+from jaxborg.observations import SUBNET_BLOCK_SIZE, get_blue_obs
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg, build_topology
 
@@ -259,6 +259,83 @@ class TestDifferentialMessages:
                 cyborg_msgs,
                 jax_msgs,
                 err_msg=f"{agent_name}: initial message section mismatch",
+            )
+
+    def _cyborg_msg_start(self, wrapped_env, agent_name):
+        num_subnets = len(wrapped_env.subnets(agent_name))
+        return 1 + num_subnets * SUBNET_BLOCK_SIZE
+
+    def test_message_delivery_matches(self, cyborg_and_jax):
+        wrapped_env, const, state = cyborg_and_jax
+        wrapped_env.reset()
+
+        sent_messages = {}
+        for agent_id in range(NUM_BLUE_AGENTS):
+            agent_name = f"blue_agent_{agent_id}"
+            msg = np.zeros(MESSAGE_LENGTH, dtype=bool)
+            for bit in range(min(agent_id + 1, MESSAGE_LENGTH)):
+                msg[bit] = True
+            sent_messages[agent_name] = msg
+
+        sleep_actions = {f"blue_agent_{i}": 0 for i in range(NUM_BLUE_AGENTS)}
+        cyborg_obs, *_ = wrapped_env.step(actions=sleep_actions, messages=sent_messages)
+
+        jax_msgs = jnp.zeros_like(state.messages)
+        for sender_id in range(NUM_BLUE_AGENTS):
+            msg_float = jnp.array(sent_messages[f"blue_agent_{sender_id}"], dtype=jnp.float32)
+            for receiver_id in range(NUM_BLUE_AGENTS):
+                jax_msgs = jax_msgs.at[sender_id, receiver_id, :].set(msg_float)
+        state_with_msgs = state.replace(messages=jax_msgs)
+
+        for agent_id in range(NUM_BLUE_AGENTS):
+            agent_name = f"blue_agent_{agent_id}"
+            msg_start = self._cyborg_msg_start(wrapped_env, agent_name)
+            cyborg_msg_section = cyborg_obs[agent_name][msg_start : msg_start + MESSAGE_SECTION_SIZE]
+
+            assert np.any(cyborg_msg_section != 0), f"{agent_name}: CybORG delivered no messages"
+
+            jax_obs = np.array(get_blue_obs(state_with_msgs, const, agent_id))
+            jax_msg_section = jax_obs[-MESSAGE_SECTION_SIZE:]
+
+            np.testing.assert_array_equal(
+                cyborg_msg_section,
+                jax_msg_section,
+                err_msg=f"{agent_name}: message section mismatch",
+            )
+
+    def test_varied_messages_match(self, cyborg_and_jax):
+        wrapped_env, const, state = cyborg_and_jax
+        wrapped_env.reset()
+
+        sent_messages = {}
+        for agent_id in range(NUM_BLUE_AGENTS):
+            agent_name = f"blue_agent_{agent_id}"
+            msg = np.zeros(MESSAGE_LENGTH, dtype=bool)
+            msg[agent_id % MESSAGE_LENGTH] = True
+            msg[(agent_id + 3) % MESSAGE_LENGTH] = True
+            sent_messages[agent_name] = msg
+
+        sleep_actions = {f"blue_agent_{i}": 0 for i in range(NUM_BLUE_AGENTS)}
+        cyborg_obs, *_ = wrapped_env.step(actions=sleep_actions, messages=sent_messages)
+
+        jax_msgs = jnp.zeros_like(state.messages)
+        for sender_id in range(NUM_BLUE_AGENTS):
+            msg_float = jnp.array(sent_messages[f"blue_agent_{sender_id}"], dtype=jnp.float32)
+            for receiver_id in range(NUM_BLUE_AGENTS):
+                jax_msgs = jax_msgs.at[sender_id, receiver_id, :].set(msg_float)
+        state_with_msgs = state.replace(messages=jax_msgs)
+
+        for agent_id in range(NUM_BLUE_AGENTS):
+            agent_name = f"blue_agent_{agent_id}"
+            msg_start = self._cyborg_msg_start(wrapped_env, agent_name)
+            cyborg_msg_section = cyborg_obs[agent_name][msg_start : msg_start + MESSAGE_SECTION_SIZE]
+            jax_obs = np.array(get_blue_obs(state_with_msgs, const, agent_id))
+            jax_msg_section = jax_obs[-MESSAGE_SECTION_SIZE:]
+
+            np.testing.assert_array_equal(
+                cyborg_msg_section,
+                jax_msg_section,
+                err_msg=f"{agent_name}: varied message section mismatch",
             )
 
     def test_non_message_obs_match_after_step(self, cyborg_and_jax):
