@@ -1,6 +1,6 @@
 import jax.numpy as jnp
 
-from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_SUBNETS
+from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES, NUM_SUBNETS
 from jaxborg.state import CC4Const
 
 RED_SLEEP = 0
@@ -28,6 +28,16 @@ RED_PRIVESC_START = RED_EXPLOIT_BLUEKEEP_END
 RED_PRIVESC_END = RED_PRIVESC_START + GLOBAL_MAX_HOSTS
 RED_IMPACT_START = RED_PRIVESC_END
 RED_IMPACT_END = RED_IMPACT_START + GLOBAL_MAX_HOSTS
+RED_AGGRESSIVE_SCAN_START = RED_IMPACT_END
+RED_AGGRESSIVE_SCAN_END = RED_AGGRESSIVE_SCAN_START + GLOBAL_MAX_HOSTS
+RED_STEALTH_SCAN_START = RED_AGGRESSIVE_SCAN_END
+RED_STEALTH_SCAN_END = RED_STEALTH_SCAN_START + GLOBAL_MAX_HOSTS
+RED_DISCOVER_DECEPTION_START = RED_STEALTH_SCAN_END
+RED_DISCOVER_DECEPTION_END = RED_DISCOVER_DECEPTION_START + GLOBAL_MAX_HOSTS
+RED_DEGRADE_START = RED_DISCOVER_DECEPTION_END
+RED_DEGRADE_END = RED_DEGRADE_START + GLOBAL_MAX_HOSTS
+RED_WITHDRAW_START = RED_DEGRADE_END
+RED_WITHDRAW_END = RED_WITHDRAW_START + GLOBAL_MAX_HOSTS
 
 ACTION_TYPE_SLEEP = 0
 ACTION_TYPE_DISCOVER = 1
@@ -42,6 +52,11 @@ ACTION_TYPE_EXPLOIT_ETERNALBLUE = 9
 ACTION_TYPE_EXPLOIT_BLUEKEEP = 10
 ACTION_TYPE_PRIVESC = 11
 ACTION_TYPE_IMPACT = 12
+ACTION_TYPE_AGGRESSIVE_SCAN = 13
+ACTION_TYPE_STEALTH_SCAN = 14
+ACTION_TYPE_DISCOVER_DECEPTION = 15
+ACTION_TYPE_DEGRADE = 16
+ACTION_TYPE_WITHDRAW = 17
 
 _EXPLOIT_RANGES = (
     (RED_EXPLOIT_SSH_START, RED_EXPLOIT_SSH_END, ACTION_TYPE_EXPLOIT_SSH),
@@ -65,13 +80,36 @@ _ENCODE_MAP = {
     "ExploitRemoteService_cc4BlueKeep": RED_EXPLOIT_BLUEKEEP_START,
     "PrivilegeEscalate": RED_PRIVESC_START,
     "Impact": RED_IMPACT_START,
+    "AggressiveServiceDiscovery": RED_AGGRESSIVE_SCAN_START,
+    "StealthServiceDiscovery": RED_STEALTH_SCAN_START,
+    "DiscoverDeception": RED_DISCOVER_DECEPTION_START,
+    "DegradeServices": RED_DEGRADE_START,
+    "Withdraw": RED_WITHDRAW_START,
 }
 
 BLUE_SLEEP = 0
 BLUE_MONITOR = 1
+BLUE_ANALYSE_START = 2
+BLUE_ANALYSE_END = BLUE_ANALYSE_START + GLOBAL_MAX_HOSTS
+BLUE_REMOVE_START = BLUE_ANALYSE_END
+BLUE_REMOVE_END = BLUE_REMOVE_START + GLOBAL_MAX_HOSTS
+BLUE_RESTORE_START = BLUE_REMOVE_END
+BLUE_RESTORE_END = BLUE_RESTORE_START + GLOBAL_MAX_HOSTS
+BLUE_DECOY_START = BLUE_RESTORE_END
+BLUE_DECOY_END = BLUE_DECOY_START + GLOBAL_MAX_HOSTS * NUM_DECOY_TYPES
+BLUE_BLOCK_TRAFFIC_START = BLUE_DECOY_END
+BLUE_BLOCK_TRAFFIC_END = BLUE_BLOCK_TRAFFIC_START + NUM_SUBNETS * NUM_SUBNETS
+BLUE_ALLOW_TRAFFIC_START = BLUE_BLOCK_TRAFFIC_END
+BLUE_ALLOW_TRAFFIC_END = BLUE_ALLOW_TRAFFIC_START + NUM_SUBNETS * NUM_SUBNETS
 
 BLUE_ACTION_TYPE_SLEEP = 0
 BLUE_ACTION_TYPE_MONITOR = 1
+BLUE_ACTION_TYPE_ANALYSE = 2
+BLUE_ACTION_TYPE_REMOVE = 3
+BLUE_ACTION_TYPE_RESTORE = 4
+BLUE_ACTION_TYPE_DECOY = 5
+BLUE_ACTION_TYPE_BLOCK_TRAFFIC = 6
+BLUE_ACTION_TYPE_ALLOW_TRAFFIC = 7
 
 
 def encode_red_action(action_name: str, target: int, agent_id: int) -> int:
@@ -81,8 +119,6 @@ def encode_red_action(action_name: str, target: int, agent_id: int) -> int:
         return RED_DISCOVER_START + target
     if action_name == "DiscoverNetworkServices":
         return RED_SCAN_START + target
-    if action_name == "Impact":
-        return RED_IMPACT_START + target
     base = _ENCODE_MAP.get(action_name)
     if base is not None:
         return base + target
@@ -109,18 +145,101 @@ def decode_red_action(action_idx: int, agent_id: int, const: CC4Const):
     action_type = jnp.where(is_impact, ACTION_TYPE_IMPACT, action_type)
     target_host = jnp.where(is_impact, action_idx - RED_IMPACT_START, target_host)
 
+    is_aggressive_scan = (action_idx >= RED_AGGRESSIVE_SCAN_START) & (action_idx < RED_AGGRESSIVE_SCAN_END)
+    action_type = jnp.where(is_aggressive_scan, ACTION_TYPE_AGGRESSIVE_SCAN, action_type)
+    target_host = jnp.where(is_aggressive_scan, action_idx - RED_AGGRESSIVE_SCAN_START, target_host)
+
+    is_stealth_scan = (action_idx >= RED_STEALTH_SCAN_START) & (action_idx < RED_STEALTH_SCAN_END)
+    action_type = jnp.where(is_stealth_scan, ACTION_TYPE_STEALTH_SCAN, action_type)
+    target_host = jnp.where(is_stealth_scan, action_idx - RED_STEALTH_SCAN_START, target_host)
+
+    is_discover_deception = (action_idx >= RED_DISCOVER_DECEPTION_START) & (action_idx < RED_DISCOVER_DECEPTION_END)
+    action_type = jnp.where(is_discover_deception, ACTION_TYPE_DISCOVER_DECEPTION, action_type)
+    target_host = jnp.where(is_discover_deception, action_idx - RED_DISCOVER_DECEPTION_START, target_host)
+
+    is_degrade = (action_idx >= RED_DEGRADE_START) & (action_idx < RED_DEGRADE_END)
+    action_type = jnp.where(is_degrade, ACTION_TYPE_DEGRADE, action_type)
+    target_host = jnp.where(is_degrade, action_idx - RED_DEGRADE_START, target_host)
+
+    is_withdraw = (action_idx >= RED_WITHDRAW_START) & (action_idx < RED_WITHDRAW_END)
+    action_type = jnp.where(is_withdraw, ACTION_TYPE_WITHDRAW, action_type)
+    target_host = jnp.where(is_withdraw, action_idx - RED_WITHDRAW_START, target_host)
+
     target_subnet = jnp.where(is_discover, action_idx - RED_DISCOVER_START, jnp.int32(-1))
     return action_type, target_subnet, target_host
 
 
-def encode_blue_action(action_name: str, target_host: int, agent_id: int) -> int:
+_BLUE_ENCODE_MAP = {
+    "Analyse": BLUE_ANALYSE_START,
+    "Remove": BLUE_REMOVE_START,
+    "Restore": BLUE_RESTORE_START,
+}
+
+_BLUE_DECOY_ENCODE_MAP = {
+    "DeployDecoy_HarakaSMPT": 0,
+    "DeployDecoy_Apache": 1,
+    "DeployDecoy_Tomcat": 2,
+    "DeployDecoy_Vsftpd": 3,
+}
+
+
+def encode_blue_action(
+    action_name: str,
+    target_host: int,
+    agent_id: int,
+    *,
+    src_subnet: int = -1,
+    dst_subnet: int = -1,
+) -> int:
     if action_name == "Sleep":
         return BLUE_SLEEP
     if action_name == "Monitor":
         return BLUE_MONITOR
+    base = _BLUE_ENCODE_MAP.get(action_name)
+    if base is not None:
+        return base + target_host
+    if action_name in _BLUE_DECOY_ENCODE_MAP:
+        decoy_type = _BLUE_DECOY_ENCODE_MAP[action_name]
+        return BLUE_DECOY_START + decoy_type * GLOBAL_MAX_HOSTS + target_host
+    if action_name == "BlockTrafficZone":
+        return BLUE_BLOCK_TRAFFIC_START + src_subnet * NUM_SUBNETS + dst_subnet
+    if action_name == "AllowTrafficZone":
+        return BLUE_ALLOW_TRAFFIC_START + src_subnet * NUM_SUBNETS + dst_subnet
     raise NotImplementedError(f"Unknown blue action {action_name}")
 
 
 def decode_blue_action(action_idx: int, agent_id: int, const: CC4Const):
+    is_analyse = (action_idx >= BLUE_ANALYSE_START) & (action_idx < BLUE_ANALYSE_END)
+    is_remove = (action_idx >= BLUE_REMOVE_START) & (action_idx < BLUE_REMOVE_END)
+    is_restore = (action_idx >= BLUE_RESTORE_START) & (action_idx < BLUE_RESTORE_END)
+    is_decoy = (action_idx >= BLUE_DECOY_START) & (action_idx < BLUE_DECOY_END)
+    is_block = (action_idx >= BLUE_BLOCK_TRAFFIC_START) & (action_idx < BLUE_BLOCK_TRAFFIC_END)
+    is_allow = (action_idx >= BLUE_ALLOW_TRAFFIC_START) & (action_idx < BLUE_ALLOW_TRAFFIC_END)
+
     action_type = jnp.where(action_idx == BLUE_MONITOR, BLUE_ACTION_TYPE_MONITOR, BLUE_ACTION_TYPE_SLEEP)
-    return action_type
+    action_type = jnp.where(is_analyse, BLUE_ACTION_TYPE_ANALYSE, action_type)
+    action_type = jnp.where(is_remove, BLUE_ACTION_TYPE_REMOVE, action_type)
+    action_type = jnp.where(is_restore, BLUE_ACTION_TYPE_RESTORE, action_type)
+    action_type = jnp.where(is_decoy, BLUE_ACTION_TYPE_DECOY, action_type)
+    action_type = jnp.where(is_block, BLUE_ACTION_TYPE_BLOCK_TRAFFIC, action_type)
+    action_type = jnp.where(is_allow, BLUE_ACTION_TYPE_ALLOW_TRAFFIC, action_type)
+
+    target_host = jnp.int32(-1)
+    target_host = jnp.where(is_analyse, action_idx - BLUE_ANALYSE_START, target_host)
+    target_host = jnp.where(is_remove, action_idx - BLUE_REMOVE_START, target_host)
+    target_host = jnp.where(is_restore, action_idx - BLUE_RESTORE_START, target_host)
+
+    decoy_offset = action_idx - BLUE_DECOY_START
+    decoy_type = jnp.where(is_decoy, decoy_offset // GLOBAL_MAX_HOSTS, jnp.int32(-1))
+    target_host = jnp.where(is_decoy, decoy_offset % GLOBAL_MAX_HOSTS, target_host)
+
+    traffic_offset_block = action_idx - BLUE_BLOCK_TRAFFIC_START
+    traffic_offset_allow = action_idx - BLUE_ALLOW_TRAFFIC_START
+    src_subnet = jnp.int32(-1)
+    dst_subnet = jnp.int32(-1)
+    src_subnet = jnp.where(is_block, traffic_offset_block // NUM_SUBNETS, src_subnet)
+    dst_subnet = jnp.where(is_block, traffic_offset_block % NUM_SUBNETS, dst_subnet)
+    src_subnet = jnp.where(is_allow, traffic_offset_allow // NUM_SUBNETS, src_subnet)
+    dst_subnet = jnp.where(is_allow, traffic_offset_allow % NUM_SUBNETS, dst_subnet)
+
+    return action_type, target_host, decoy_type, src_subnet, dst_subnet
