@@ -5,7 +5,12 @@ import chex
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
     NUM_SUBNETS,
+    NUM_SERVICES,
+    SERVICE_IDS,
     ACTIVITY_SCAN,
+    ACTIVITY_EXPLOIT,
+    COMPROMISE_NONE,
+    COMPROMISE_USER,
 )
 from jaxborg.state import CC4State, CC4Const
 
@@ -14,10 +19,13 @@ RED_DISCOVER_START = 1
 RED_DISCOVER_END = RED_DISCOVER_START + NUM_SUBNETS
 RED_SCAN_START = RED_DISCOVER_END
 RED_SCAN_END = RED_SCAN_START + GLOBAL_MAX_HOSTS
+RED_EXPLOIT_SSH_START = RED_SCAN_END
+RED_EXPLOIT_SSH_END = RED_EXPLOIT_SSH_START + GLOBAL_MAX_HOSTS
 
 ACTION_TYPE_SLEEP = 0
 ACTION_TYPE_DISCOVER = 1
 ACTION_TYPE_SCAN = 2
+ACTION_TYPE_EXPLOIT_SSH = 3
 
 
 def encode_red_action(action_name: str, target: int, agent_id: int) -> int:
@@ -27,16 +35,23 @@ def encode_red_action(action_name: str, target: int, agent_id: int) -> int:
         return RED_DISCOVER_START + target
     if action_name == "DiscoverNetworkServices":
         return RED_SCAN_START + target
-    raise NotImplementedError(f"Subsystem 4+: red action {action_name}")
+    if action_name == "ExploitRemoteService_cc4SSHBruteForce":
+        return RED_EXPLOIT_SSH_START + target
+    raise NotImplementedError(f"Subsystem 5+: red action {action_name}")
 
 
 def decode_red_action(action_idx: int, agent_id: int, const: CC4Const):
     is_discover = (action_idx >= RED_DISCOVER_START) & (action_idx < RED_DISCOVER_END)
     is_scan = (action_idx >= RED_SCAN_START) & (action_idx < RED_SCAN_END)
-    action_type = jnp.where(is_discover, ACTION_TYPE_DISCOVER,
-                  jnp.where(is_scan, ACTION_TYPE_SCAN, ACTION_TYPE_SLEEP))
+    is_exploit_ssh = (action_idx >= RED_EXPLOIT_SSH_START) & (action_idx < RED_EXPLOIT_SSH_END)
+    action_type = jnp.where(
+        is_discover, ACTION_TYPE_DISCOVER,
+        jnp.where(is_scan, ACTION_TYPE_SCAN,
+        jnp.where(is_exploit_ssh, ACTION_TYPE_EXPLOIT_SSH, ACTION_TYPE_SLEEP)))
     target_subnet = jnp.where(is_discover, action_idx - RED_DISCOVER_START, -1)
-    target_host = jnp.where(is_scan, action_idx - RED_SCAN_START, -1)
+    target_host = jnp.where(
+        is_scan, action_idx - RED_SCAN_START,
+        jnp.where(is_exploit_ssh, action_idx - RED_EXPLOIT_SSH_START, -1))
     return action_type, target_subnet, target_host
 
 
@@ -119,6 +134,72 @@ def _apply_scan(
     )
 
 
+SSH_SERVICE_IDX = SERVICE_IDS["SSHD"]
+
+
+def _apply_exploit_ssh(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+    target_host: chex.Array,
+) -> CC4State:
+    is_active = const.host_active[target_host]
+    is_scanned = state.red_scanned_hosts[agent_id, target_host]
+    has_ssh = state.host_services[target_host, SSH_SERVICE_IDX]
+    has_bruteforceable = const.host_has_bruteforceable_user[target_host]
+    target_subnet = const.host_subnet[target_host]
+    can_reach = _can_reach_subnet(state, const, agent_id, target_subnet)
+    already_has_session = state.red_sessions[agent_id, target_host]
+
+    success = (is_active & is_scanned & has_ssh & has_bruteforceable
+               & can_reach & ~already_has_session)
+
+    red_sessions = jnp.where(
+        success,
+        state.red_sessions.at[agent_id, target_host].set(True),
+        state.red_sessions,
+    )
+
+    new_priv = jnp.where(
+        success,
+        jnp.maximum(state.red_privilege[agent_id, target_host], COMPROMISE_USER),
+        state.red_privilege[agent_id, target_host],
+    )
+    red_privilege = jnp.where(
+        success,
+        state.red_privilege.at[agent_id, target_host].set(new_priv),
+        state.red_privilege,
+    )
+
+    host_compromised = jnp.where(
+        success,
+        state.host_compromised.at[target_host].set(
+            jnp.maximum(state.host_compromised[target_host], COMPROMISE_USER)
+        ),
+        state.host_compromised,
+    )
+
+    host_has_malware = jnp.where(
+        success,
+        state.host_has_malware.at[target_host].set(True),
+        state.host_has_malware,
+    )
+
+    activity = jnp.where(
+        success,
+        state.red_activity_this_step.at[target_host].set(ACTIVITY_EXPLOIT),
+        state.red_activity_this_step,
+    )
+
+    return state.replace(
+        red_sessions=red_sessions,
+        red_privilege=red_privilege,
+        host_compromised=host_compromised,
+        host_has_malware=host_has_malware,
+        red_activity_this_step=activity,
+    )
+
+
 def apply_red_action(
     state: CC4State,
     const: CC4Const,
@@ -137,6 +218,13 @@ def apply_red_action(
     state = jax.lax.cond(
         action_type == ACTION_TYPE_SCAN,
         lambda s: _apply_scan(s, const, agent_id, target_host),
+        lambda s: s,
+        state,
+    )
+
+    state = jax.lax.cond(
+        action_type == ACTION_TYPE_EXPLOIT_SSH,
+        lambda s: _apply_exploit_ssh(s, const, agent_id, target_host),
         lambda s: s,
         state,
     )
