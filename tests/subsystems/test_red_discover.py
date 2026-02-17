@@ -61,16 +61,18 @@ class TestEncoding:
             assert code == RED_DISCOVER_START + sid
 
     def test_decode_sleep(self, jax_const):
-        action_type, target_subnet = decode_red_action(RED_SLEEP, 0, jax_const)
+        action_type, target_subnet, target_host = decode_red_action(RED_SLEEP, 0, jax_const)
         assert int(action_type) == 0
         assert int(target_subnet) == -1
+        assert int(target_host) == -1
 
     def test_decode_discover_roundtrip(self, jax_const):
         for sid in range(NUM_SUBNETS):
             code = encode_red_action("DiscoverRemoteSystems", sid, 0)
-            action_type, target_subnet = decode_red_action(code, 0, jax_const)
+            action_type, target_subnet, target_host = decode_red_action(code, 0, jax_const)
             assert int(action_type) == 1
             assert int(target_subnet) == sid
+            assert int(target_host) == -1
 
 
 class TestHasAnySession:
