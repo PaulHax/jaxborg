@@ -25,5 +25,19 @@ packages = ["src/jaxborg"]
 cyborg = { git = "https://github.com/PaulHax/cage-challenge-4.git", rev = "69ded9aa40b16ce87f7106fe961f68ad08d47176" }
 jaxmarl = { git = "https://github.com/FLAIROx/JaxMARL.git", branch = "main" }
 
+[dependency-groups]
+dev = [
+    "pytest-xdist>=3.8.0",
+    "ruff",
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
+addopts = "-n 1"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]

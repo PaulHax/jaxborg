@@ -1,47 +1,47 @@
+import chex
 import jax.numpy as jnp
 from flax import struct
-import chex
 
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
-    NUM_SUBNETS,
+    MAX_STEPS,
+    MESSAGE_LENGTH,
+    MISSION_PHASES,
     NUM_BLUE_AGENTS,
+    NUM_DECOY_TYPES,
     NUM_RED_AGENTS,
     NUM_SERVICES,
-    NUM_DECOY_TYPES,
-    MISSION_PHASES,
-    MESSAGE_LENGTH,
-    MAX_STEPS,
+    NUM_SUBNETS,
 )
 
 
 @struct.dataclass
 class CC4Const:
-    host_active: chex.Array               # (GLOBAL_MAX_HOSTS,) bool
-    host_subnet: chex.Array               # (GLOBAL_MAX_HOSTS,) int
-    host_is_router: chex.Array            # (GLOBAL_MAX_HOSTS,) bool
-    host_is_server: chex.Array            # (GLOBAL_MAX_HOSTS,) bool
-    host_is_user: chex.Array              # (GLOBAL_MAX_HOSTS,) bool
-    subnet_adjacency: chex.Array          # (NUM_SUBNETS, NUM_SUBNETS) bool
-    data_links: chex.Array                # (GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS) bool
+    host_active: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
+    host_subnet: chex.Array  # (GLOBAL_MAX_HOSTS,) int
+    host_is_router: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
+    host_is_server: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
+    host_is_user: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
+    subnet_adjacency: chex.Array  # (NUM_SUBNETS, NUM_SUBNETS) bool
+    data_links: chex.Array  # (GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS) bool
 
-    initial_services: chex.Array          # (GLOBAL_MAX_HOSTS, NUM_SERVICES) bool
+    initial_services: chex.Array  # (GLOBAL_MAX_HOSTS, NUM_SERVICES) bool
     host_has_bruteforceable_user: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
-    host_has_rfi: chex.Array              # (GLOBAL_MAX_HOSTS,) bool
-    host_respond_to_ping: chex.Array      # (GLOBAL_MAX_HOSTS,) bool
+    host_has_rfi: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
+    host_respond_to_ping: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
 
-    blue_agent_subnets: chex.Array        # (NUM_BLUE_AGENTS, NUM_SUBNETS) bool
-    blue_agent_hosts: chex.Array          # (NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS) bool
-    red_start_hosts: chex.Array           # (NUM_RED_AGENTS,) int
-    red_agent_active: chex.Array          # (NUM_RED_AGENTS,) bool
+    blue_agent_subnets: chex.Array  # (NUM_BLUE_AGENTS, NUM_SUBNETS) bool
+    blue_agent_hosts: chex.Array  # (NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS) bool
+    red_start_hosts: chex.Array  # (NUM_RED_AGENTS,) int
+    red_agent_active: chex.Array  # (NUM_RED_AGENTS,) bool
 
-    green_agent_host: chex.Array          # (GLOBAL_MAX_HOSTS,) int — green agent index per host, -1 if none
-    green_agent_active: chex.Array        # (GLOBAL_MAX_HOSTS,) bool
+    green_agent_host: chex.Array  # (GLOBAL_MAX_HOSTS,) int — green agent index per host, -1 if none
+    green_agent_active: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
     num_green_agents: int
 
-    phase_rewards: chex.Array             # (MISSION_PHASES, NUM_SUBNETS, 3) float — LWF/ASF/RIA per subnet per phase
-    phase_boundaries: chex.Array          # (MISSION_PHASES,) int — step at which each phase starts
-    allowed_subnet_pairs: chex.Array      # (MISSION_PHASES, NUM_SUBNETS, NUM_SUBNETS) bool
+    phase_rewards: chex.Array  # (MISSION_PHASES, NUM_SUBNETS, 3) float — LWF/ASF/RIA per subnet per phase
+    phase_boundaries: chex.Array  # (MISSION_PHASES,) int — step at which each phase starts
+    allowed_subnet_pairs: chex.Array  # (MISSION_PHASES, NUM_SUBNETS, NUM_SUBNETS) bool
 
     max_steps: int
     num_hosts: int
@@ -50,27 +50,27 @@ class CC4Const:
 @struct.dataclass
 class CC4State:
     time: int
-    done: chex.Array                      # scalar bool
-    mission_phase: chex.Array             # scalar int
+    done: chex.Array  # scalar bool
+    mission_phase: chex.Array  # scalar int
 
-    host_compromised: chex.Array          # (GLOBAL_MAX_HOSTS,) int — 0=None, 1=User, 2=Privileged
-    host_services: chex.Array             # (GLOBAL_MAX_HOSTS, NUM_SERVICES) bool
-    host_decoys: chex.Array               # (GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES) bool
-    ot_service_stopped: chex.Array        # (GLOBAL_MAX_HOSTS,) bool
+    host_compromised: chex.Array  # (GLOBAL_MAX_HOSTS,) int — 0=None, 1=User, 2=Privileged
+    host_services: chex.Array  # (GLOBAL_MAX_HOSTS, NUM_SERVICES) bool
+    host_decoys: chex.Array  # (GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES) bool
+    ot_service_stopped: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
 
-    red_sessions: chex.Array              # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
-    red_privilege: chex.Array             # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int — 0/1/2
-    red_discovered_hosts: chex.Array      # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
-    red_scanned_hosts: chex.Array         # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
+    red_sessions: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
+    red_privilege: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int — 0/1/2
+    red_discovered_hosts: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
+    red_scanned_hosts: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
 
-    red_activity_this_step: chex.Array    # (GLOBAL_MAX_HOSTS,) int — 0=None, 1=Scan, 2=Exploit
-    host_activity_detected: chex.Array    # (GLOBAL_MAX_HOSTS,) bool
-    host_has_malware: chex.Array          # (GLOBAL_MAX_HOSTS,) bool
+    red_activity_this_step: chex.Array  # (GLOBAL_MAX_HOSTS,) int — 0=None, 1=Scan, 2=Exploit
+    host_activity_detected: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
+    host_has_malware: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
 
-    blocked_zones: chex.Array             # (NUM_SUBNETS, NUM_SUBNETS) bool
-    messages: chex.Array                  # (NUM_BLUE_AGENTS, NUM_BLUE_AGENTS, MESSAGE_LENGTH) float
+    blocked_zones: chex.Array  # (NUM_SUBNETS, NUM_SUBNETS) bool
+    messages: chex.Array  # (NUM_BLUE_AGENTS, NUM_BLUE_AGENTS, MESSAGE_LENGTH) float
 
-    fsm_host_states: chex.Array           # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int — FSM state per red agent per host
+    fsm_host_states: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int — FSM state per red agent per host
 
 
 def create_initial_const() -> CC4Const:

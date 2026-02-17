@@ -1,35 +1,33 @@
-import numpy as np
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
+from jaxborg.actions import apply_red_action
+from jaxborg.actions.encoding import (
+    ACTION_TYPE_PRIVESC,
+    RED_EXPLOIT_BLUEKEEP_END,
+    RED_PRIVESC_END,
+    RED_PRIVESC_START,
+    decode_red_action,
+    encode_red_action,
+)
 from jaxborg.constants import (
+    ACTIVITY_EXPLOIT,
+    ACTIVITY_NONE,
+    COMPROMISE_NONE,
+    COMPROMISE_PRIVILEGED,
+    COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
     NUM_RED_AGENTS,
     SERVICE_IDS,
-    ACTIVITY_NONE,
-    ACTIVITY_EXPLOIT,
-    COMPROMISE_NONE,
-    COMPROMISE_USER,
-    COMPROMISE_PRIVILEGED,
 )
-from jaxborg.state import CC4State, CC4Const, create_initial_state
-from jaxborg.topology import build_topology, CYBORG_SUFFIX_TO_ID
-from jaxborg.actions import (
-    encode_red_action,
-    decode_red_action,
-    apply_red_action,
-    RED_PRIVESC_START,
-    RED_PRIVESC_END,
-    RED_EXPLOIT_BLUEKEEP_END,
-    ACTION_TYPE_PRIVESC,
-)
-
+from jaxborg.state import create_initial_state
+from jaxborg.topology import CYBORG_SUFFIX_TO_ID, build_topology
 
 try:
     from CybORG import CybORG
     from CybORG.Agents import SleepAgent
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
     from CybORG.Simulator.Actions import DiscoverRemoteSystems, PrivilegeEscalate
     from CybORG.Simulator.Actions.AbstractActions.DiscoverNetworkServices import (
         AggressiveServiceDiscovery,
@@ -37,6 +35,8 @@ try:
     from CybORG.Simulator.Actions.AbstractActions.ExploitRemoteService import (
         ExploitRemoteService,
     )
+    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
     HAS_CYBORG = True
 except ImportError:
     HAS_CYBORG = False
@@ -62,30 +62,26 @@ def _setup_exploited_state(jax_const, target_host):
     target_subnet = int(jax_const.host_subnet[target_host])
     discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
     state = apply_red_action(state, jax_const, 0, discover_idx)
-    state = state.replace(
-        red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-    )
+    state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
     scan_idx = encode_red_action("DiscoverNetworkServices", target_host, 0)
     state = apply_red_action(state, jax_const, 0, scan_idx)
-    state = state.replace(
-        red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-    )
+    state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
     exploit_idx = encode_red_action("ExploitRemoteService_cc4SSHBruteForce", target_host, 0)
     state = apply_red_action(state, jax_const, 0, exploit_idx)
-    state = state.replace(
-        red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-    )
+    state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
     return state
 
 
 def _find_exploitable_host(jax_const, exclude_start=True):
     for h in range(jax_const.num_hosts):
-        if (jax_const.host_active[h]
-                and not jax_const.host_is_router[h]
-                and jax_const.initial_services[h, SSH_SVC]
-                and jax_const.host_has_bruteforceable_user[h]):
+        if (
+            jax_const.host_active[h]
+            and not jax_const.host_is_router[h]
+            and jax_const.initial_services[h, SSH_SVC]
+            and jax_const.host_has_bruteforceable_user[h]
+        ):
             if exclude_start and h == int(jax_const.red_start_hosts[0]):
                 continue
             return h
@@ -93,7 +89,6 @@ def _find_exploitable_host(jax_const, exclude_start=True):
 
 
 class TestPrivescEncoding:
-
     def test_privesc_range_starts_after_bluekeep(self):
         assert RED_PRIVESC_START == RED_EXPLOIT_BLUEKEEP_END
 
@@ -115,7 +110,6 @@ class TestPrivescEncoding:
 
 
 class TestApplyPrivesc:
-
     def test_privesc_upgrades_to_privileged(self, jax_const):
         target = _find_exploitable_host(jax_const)
         if target is None:
@@ -166,9 +160,7 @@ class TestApplyPrivesc:
         state1 = apply_red_action(state, jax_const, 0, action_idx)
         assert int(state1.red_privilege[0, target]) == COMPROMISE_PRIVILEGED
 
-        state1 = state1.replace(
-            red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-        )
+        state1 = state1.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
         state2 = apply_red_action(state1, jax_const, 0, action_idx)
         assert int(state2.red_activity_this_step[target]) == ACTIVITY_NONE
 
@@ -229,7 +221,6 @@ class TestApplyPrivesc:
 
 
 class TestPrivescChain:
-
     def test_discover_scan_exploit_privesc_chain(self, jax_const):
         target = _find_exploitable_host(jax_const)
         if target is None:
@@ -250,7 +241,6 @@ class TestPrivescChain:
 
 @cyborg_required
 class TestDifferentialWithCybORG:
-
     @pytest.fixture
     def cyborg_env(self):
         sg = EnterpriseScenarioGenerator(
@@ -264,6 +254,7 @@ class TestDifferentialWithCybORG:
     @pytest.fixture
     def cyborg_and_jax(self, cyborg_env):
         from jaxborg.topology import build_const_from_cyborg
+
         const = build_const_from_cyborg(cyborg_env)
         state = create_initial_state()
         state = state.replace(host_services=jnp.array(const.initial_services))
@@ -280,26 +271,25 @@ class TestDifferentialWithCybORG:
         subnet_cidr = cyborg_state.subnet_name_to_cidr[subnet_name]
         sid = CYBORG_SUFFIX_TO_ID[subnet_name]
 
-        discover_action = DiscoverRemoteSystems(
-            subnet=subnet_cidr, session=0, agent="red_agent_0"
-        )
+        discover_action = DiscoverRemoteSystems(subnet=subnet_cidr, session=0, agent="red_agent_0")
         discover_action.duration = 1
         cyborg_env.step(agent="red_agent_0", action=discover_action)
 
         discover_idx = encode_red_action("DiscoverRemoteSystems", sid, 0)
         state = apply_red_action(state, const, 0, discover_idx)
-        state = state.replace(
-            red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-        )
+        state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
         discovered_jax = np.array(state.red_discovered_hosts[0])
         exploitable = [
-            h for h in range(const.num_hosts)
-            if (discovered_jax[h]
+            h
+            for h in range(const.num_hosts)
+            if (
+                discovered_jax[h]
                 and not const.host_is_router[h]
                 and const.initial_services[h, SSH_SVC]
                 and const.host_has_bruteforceable_user[h]
-                and h != int(const.red_start_hosts[0]))
+                and h != int(const.red_start_hosts[0])
+            )
         ]
         assert len(exploitable) > 0, "No exploitable hosts found"
         target_h = exploitable[0]
@@ -312,32 +302,22 @@ class TestDifferentialWithCybORG:
                 break
         assert target_ip is not None
 
-        scan_action = AggressiveServiceDiscovery(
-            session=0, agent="red_agent_0", ip_address=target_ip
-        )
+        scan_action = AggressiveServiceDiscovery(session=0, agent="red_agent_0", ip_address=target_ip)
         scan_action.duration = 1
         cyborg_env.step(agent="red_agent_0", action=scan_action)
 
         scan_idx = encode_red_action("DiscoverNetworkServices", target_h, 0)
         state = apply_red_action(state, const, 0, scan_idx)
-        state = state.replace(
-            red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-        )
+        state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
-        exploit_action = ExploitRemoteService(
-            ip_address=target_ip, session=0, agent="red_agent_0"
-        )
+        exploit_action = ExploitRemoteService(ip_address=target_ip, session=0, agent="red_agent_0")
         exploit_action.duration = 1
         cyborg_result = cyborg_env.step(agent="red_agent_0", action=exploit_action)
-        cyborg_exploit_success = cyborg_result.observation.get("success") == True
+        cyborg_exploit_success = cyborg_result.observation.get("success") == True  # noqa: E712
 
-        exploit_idx = encode_red_action(
-            "ExploitRemoteService_cc4SSHBruteForce", target_h, 0
-        )
+        exploit_idx = encode_red_action("ExploitRemoteService_cc4SSHBruteForce", target_h, 0)
         state = apply_red_action(state, const, 0, exploit_idx)
-        state = state.replace(
-            red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-        )
+        state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
         jax_exploit_success = bool(state.red_sessions[0, target_h])
         assert jax_exploit_success == cyborg_exploit_success
@@ -347,16 +327,12 @@ class TestDifferentialWithCybORG:
 
     def test_privesc_success_matches_cyborg(self, cyborg_and_jax):
         cyborg_env, const, state = cyborg_and_jax
-        state, target_h, target_hostname, target_ip = self._find_and_exploit_host(
-            cyborg_env, const, state
-        )
+        state, target_h, target_hostname, target_ip = self._find_and_exploit_host(cyborg_env, const, state)
 
-        privesc_action = PrivilegeEscalate(
-            hostname=target_hostname, session=0, agent="red_agent_0"
-        )
+        privesc_action = PrivilegeEscalate(hostname=target_hostname, session=0, agent="red_agent_0")
         privesc_action.duration = 1
         cyborg_result = cyborg_env.step(agent="red_agent_0", action=privesc_action)
-        cyborg_success = cyborg_result.observation.get("success") == True
+        cyborg_success = cyborg_result.observation.get("success") == True  # noqa: E712
 
         privesc_idx = encode_red_action("PrivilegeEscalate", target_h, 0)
         new_state = apply_red_action(state, const, 0, privesc_idx)
@@ -364,8 +340,7 @@ class TestDifferentialWithCybORG:
         jax_success = int(new_state.red_privilege[0, target_h]) == COMPROMISE_PRIVILEGED
 
         assert jax_success == cyborg_success, (
-            f"JAX privesc success={jax_success} but CybORG={cyborg_success} "
-            f"for host {target_h} ({target_hostname})"
+            f"JAX privesc success={jax_success} but CybORG={cyborg_success} for host {target_h} ({target_hostname})"
         )
 
         if cyborg_success:
@@ -374,34 +349,26 @@ class TestDifferentialWithCybORG:
 
     def test_privesc_privilege_level_matches_cyborg(self, cyborg_and_jax):
         cyborg_env, const, state = cyborg_and_jax
-        state, target_h, target_hostname, target_ip = self._find_and_exploit_host(
-            cyborg_env, const, state
-        )
+        state, target_h, target_hostname, target_ip = self._find_and_exploit_host(cyborg_env, const, state)
 
         cyborg_state_obj = cyborg_env.environment_controller.state
-        cyborg_host = cyborg_state_obj.hosts[target_hostname]
+        cyborg_state_obj.hosts[target_hostname]
         sessions_before = [
-            s for s in cyborg_state_obj.sessions["red_agent_0"].values()
-            if s.hostname == target_hostname
+            s for s in cyborg_state_obj.sessions["red_agent_0"].values() if s.hostname == target_hostname
         ]
         assert len(sessions_before) > 0
         cyborg_priv_before = any(s.has_privileged_access() for s in sessions_before)
         jax_priv_before = int(state.red_privilege[0, target_h])
         assert (jax_priv_before >= COMPROMISE_PRIVILEGED) == cyborg_priv_before
 
-        privesc_action = PrivilegeEscalate(
-            hostname=target_hostname, session=0, agent="red_agent_0"
-        )
+        privesc_action = PrivilegeEscalate(hostname=target_hostname, session=0, agent="red_agent_0")
         privesc_action.duration = 1
         cyborg_env.step(agent="red_agent_0", action=privesc_action)
 
         privesc_idx = encode_red_action("PrivilegeEscalate", target_h, 0)
         new_state = apply_red_action(state, const, 0, privesc_idx)
 
-        sessions_after = [
-            s for s in cyborg_state_obj.sessions["red_agent_0"].values()
-            if s.hostname == target_hostname
-        ]
+        sessions_after = [s for s in cyborg_state_obj.sessions["red_agent_0"].values() if s.hostname == target_hostname]
         cyborg_priv_after = any(s.has_privileged_access() for s in sessions_after)
         jax_priv_after = int(new_state.red_privilege[0, target_h]) >= COMPROMISE_PRIVILEGED
 
@@ -418,24 +385,24 @@ class TestDifferentialWithCybORG:
         start_host = int(const.red_start_hosts[0])
         target_h = None
         for h in range(const.num_hosts):
-            if (const.host_active[h]
-                    and not const.host_is_router[h]
-                    and h != start_host
-                    and not state.red_sessions[0, h]):
+            if (
+                const.host_active[h]
+                and not const.host_is_router[h]
+                and h != start_host
+                and not state.red_sessions[0, h]
+            ):
                 target_h = h
                 break
         assert target_h is not None
         target_hostname = sorted_hosts[target_h]
 
-        privesc_action = PrivilegeEscalate(
-            hostname=target_hostname, session=0, agent="red_agent_0"
-        )
+        privesc_action = PrivilegeEscalate(hostname=target_hostname, session=0, agent="red_agent_0")
         privesc_action.duration = 1
         cyborg_result = cyborg_env.step(agent="red_agent_0", action=privesc_action)
-        cyborg_success = cyborg_result.observation.get("success") == True
+        cyborg_success = cyborg_result.observation.get("success") == True  # noqa: E712
 
         privesc_idx = encode_red_action("PrivilegeEscalate", target_h, 0)
         new_state = apply_red_action(state, const, 0, privesc_idx)
         jax_success = int(new_state.red_privilege[0, target_h]) >= COMPROMISE_PRIVILEGED
 
-        assert jax_success == cyborg_success == False
+        assert not jax_success and not cyborg_success
