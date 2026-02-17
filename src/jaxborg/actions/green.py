@@ -88,9 +88,9 @@ def _apply_single_green(
     src_subnet = const.host_subnet[host_idx]
     phase = state.mission_phase
     allowed = const.allowed_subnet_pairs[phase]
+    own_subnet = jnp.zeros(NUM_SUBNETS, dtype=jnp.bool_).at[src_subnet].set(True)
     src_in_allowed = jnp.any(allowed[src_subnet])
-    own_subnet_only = jnp.zeros(NUM_SUBNETS, dtype=jnp.bool_).at[src_subnet].set(True)
-    reachable_subnets = jnp.where(src_in_allowed, allowed[src_subnet], own_subnet_only)
+    reachable_subnets = jnp.where(src_in_allowed, allowed[src_subnet] | own_subnet, own_subnet)
 
     is_reachable_server = (
         const.host_active
