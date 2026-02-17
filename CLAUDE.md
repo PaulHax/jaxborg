@@ -1,0 +1,69 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What This Is
+
+JAX port of CybORG CAGE Challenge 4 (CC4) — a multi-agent cybersecurity simulation (9 subnets, ~80 hosts, 5 blue agents, 6 red agents, 3 mission phases). Re-implements CC4 as JIT-compilable JAX arrays for GPU-accelerated parallel RL training via JaxMARL's `MultiAgentEnv` interface.
+
+## Commands
+
+```bash
+uv sync                                              # install deps
+uv run pytest tests/ -v --ignore=tests/test_env_smoke.py  # all tests (skip slow CybORG smoke)
+uv run pytest tests/subsystems/test_red_discover.py -v     # single test file
+uv run pytest tests/subsystems/test_red_discover.py::TestClassName::test_name -v  # single test
+```
+
+Training output goes to `../jaxborg-exp/`.
+
+## Architecture
+
+### Core Data Structures (`src/jaxborg/state.py`)
+
+Two `flax.struct.dataclass` PyTrees:
+
+- **CC4Const** — static topology: host properties, subnet adjacency, data links, agent assignments, phase rewards. Built once per episode via `build_topology()` (pure JAX) or `build_const_from_cyborg()` (extracts from CybORG instance).
+- **CC4State** — dynamic per-step state: compromise levels, red sessions/privilege/discovery, activity tracking, decoys, blocked zones, messages, FSM states. Created via `create_initial_state()`.
+
+All host-indexed arrays are padded to `GLOBAL_MAX_HOSTS=137` with `host_active` masking. State updates use `state.replace(field=new_value)` and `array.at[idx].set(value)`.
+
+### Action System (`src/jaxborg/actions/`)
+
+Actions are integer-encoded. `encoding.py` defines the action space layout (ranges of ints mapping to action type + target). Red actions dispatch through `apply_red_action()` which decodes then branches via `jax.lax.cond` to per-action handlers (discover, scan, 8 exploit types, privesc, impact). Blue actions dispatch through `apply_blue_action()`.
+
+Each action module (e.g., `red_exploit.py`, `blue_monitor.py`) exports an `apply_*` function: `(CC4State, CC4Const, agent_id, target) -> CC4State`.
+
+### Topology (`src/jaxborg/topology.py`)
+
+Builds the static `CC4Const` from seed. Hardcoded subnet adjacency (NACLs), router backbone, host generation with per-subnet counts. Two entry points: `build_topology(seeds, num_steps)` for pure JAX, `build_const_from_cyborg(env)` for extracting from a live CybORG instance.
+
+## Development Workflow
+
+Implementation is driven by a 22-subsystem catalog (`tests/catalog.py`) with dependency ordering. `scripts/ralph_wiggum.sh` automates the loop: get next subsystem, implement JAX code + differential tests, validate, commit.
+
+Check progress: `tests/catalog_status.json` tracks which subsystems are passing.
+
+### Differential Testing
+
+Every test must compare JAX output against CybORG. Pattern:
+1. Create CybORG env via `cyborg_env` fixture (conftest.py): SleepAgent blue, EnterpriseGreenAgent green, FiniteStateRedAgent red, seed=42, 500 steps
+2. Build JAX const: `build_const_from_cyborg(cyborg_env)`
+3. Create JAX state: `create_initial_state()`
+4. Execute identical action sequences in both environments
+5. Compare relevant state fields (host_compromised, red_sessions, red_privilege, etc.)
+
+Test infrastructure lives in `tests/differential/` (harness, action translator, state comparator).
+
+## JAX Constraints
+
+- `jax.lax.cond()` for branching (no Python if/else in JIT code)
+- No Python loops over dynamic values in JIT code
+- `flax.struct.dataclass` for PyTree-compatible state
+- Use `numpy` for host indexing in tests; `jax.numpy` for JIT-compiled logic
+
+## Reference
+
+CC2 JAX port at `/home/paulhax/src/cyber/jaxmarl/integration/jaxmarl/environments/cage/` for patterns.
+
+CybORG source installed at `.venv/lib/python3.11/site-packages/CybORG/`.
