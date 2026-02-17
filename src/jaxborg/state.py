@@ -12,6 +12,7 @@ from jaxborg.constants import (
     NUM_RED_AGENTS,
     NUM_SERVICES,
     NUM_SUBNETS,
+    OBS_HOSTS_PER_SUBNET,
 )
 
 
@@ -42,6 +43,10 @@ class CC4Const:
     phase_rewards: chex.Array  # (MISSION_PHASES, NUM_SUBNETS, 3) float — LWF/ASF/RIA per subnet per phase
     phase_boundaries: chex.Array  # (MISSION_PHASES,) int — step at which each phase starts
     allowed_subnet_pairs: chex.Array  # (MISSION_PHASES, NUM_SUBNETS, NUM_SUBNETS) bool
+
+    obs_host_map: chex.Array  # (NUM_SUBNETS, OBS_HOSTS_PER_SUBNET) int — global host idx per subnet in obs order
+    blue_obs_subnets: chex.Array  # (NUM_BLUE_AGENTS, 3) int — subnet IDs per agent in CybORG alphabetical order
+    comms_policy: chex.Array  # (MISSION_PHASES, NUM_SUBNETS, NUM_SUBNETS) bool — True = not connected
 
     max_steps: int
     num_hosts: int
@@ -96,6 +101,9 @@ def create_initial_const() -> CC4Const:
         phase_rewards=jnp.zeros((MISSION_PHASES, NUM_SUBNETS, 3), dtype=jnp.float32),
         phase_boundaries=jnp.zeros(MISSION_PHASES, dtype=jnp.int32),
         allowed_subnet_pairs=jnp.zeros((MISSION_PHASES, NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_),
+        obs_host_map=jnp.full((NUM_SUBNETS, OBS_HOSTS_PER_SUBNET), GLOBAL_MAX_HOSTS, dtype=jnp.int32),
+        blue_obs_subnets=jnp.full((NUM_BLUE_AGENTS, 3), -1, dtype=jnp.int32),
+        comms_policy=jnp.zeros((MISSION_PHASES, NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_),
         max_steps=MAX_STEPS,
         num_hosts=0,
     )
