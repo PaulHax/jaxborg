@@ -5,76 +5,37 @@ the CybORG source at `.venv/lib/python3.11/site-packages/CybORG/`.
 
 ## Detection Rates
 
-### AggressiveServiceDiscovery: always detected (CybORG: 75%)
-CybORG's `AggressiveServiceDiscovery` has `detection_rate = 0.75`, meaning 25% of
-aggressive scans go undetected. The JAX implementation always sets
-`red_activity_this_step = ACTIVITY_SCAN`, making every aggressive scan visible to
-Monitor. This makes blue's job slightly easier than in CybORG.
+### ~~AggressiveServiceDiscovery: always detected (CybORG: 75%)~~ RESOLVED
 
-- JAX: `red_aggressive_scan.py` — unconditionally sets activity flag
-- CybORG: `AggressiveServiceDiscovery.py` — `self.detection_rate = 0.75`
+Now matches CybORG: 75% detection rate via `sample_detection_random()`. Uses precomputed
+RNG sequences in differential tests for exact reproducibility.
 
-### StealthServiceDiscovery: never detected (CybORG: 25%)
-CybORG's `StealthServiceDiscovery` has `detection_rate = 0.25`, meaning 25% of stealth
-scans ARE detected. The JAX implementation never sets the activity flag, making stealth
-scans completely invisible. This makes blue's job slightly harder than in CybORG.
+### ~~StealthServiceDiscovery: never detected (CybORG: 25%)~~ RESOLVED
 
-- JAX: `red_stealth_scan.py` — does not set activity flag
-- CybORG: `StealthServiceDiscovery.py` — `self.detection_rate = 0.25`
+Now matches CybORG: 25% detection rate via `sample_detection_random()`. Sets
+`ACTIVITY_SCAN` when detected, matching CybORG's behavior.
 
-### DiscoverDeception: deterministic (CybORG: probabilistic)
-CybORG's `DiscoverDeception` has a 50% true positive rate (correctly identifies decoys)
-and 10% false positive rate (incorrectly flags real services as decoys). The JAX
-implementation deterministically detects all decoys with no false positives.
+### ~~DiscoverDeception: deterministic (CybORG: probabilistic)~~ RESOLVED
 
-- JAX: `red_discover_deception.py` — checks `jnp.any(state.host_decoys[target_host])`
-- CybORG: `DiscoverDeception.py` — `tp_rate=0.5`, `fp_rate=0.1`
+Now matches CybORG: 50% true positive rate, 10% false positive rate. Two calls to
+`sample_detection_random()` for TP and FP rolls.
 
-## Blue Remove: Malware Clearing
+## ~~Blue Remove: Malware Clearing~~ RESOLVED
 
-CybORG's `Remove` action kills suspicious processes/sessions but does NOT delete malware
-files from disk. This means `Analyse` (which checks for malware files via DensityScout +
-SigCheck) would still detect the host as compromised after a successful Remove.
+Now matches CybORG: Remove only kills user-level sessions. Malware files persist until
+Restore, so Analyse will still detect a compromised host after a successful Remove.
 
-The JAX implementation clears `host_has_malware` when Remove successfully eliminates all
-user-level red sessions on a host. This means Analyse would NOT detect the host after a
-successful Remove.
+## ~~Green Agent: False Positive Observation Field~~ RESOLVED
 
-- JAX: `blue_remove.py:33-37` — clears `host_has_malware` when `~any_compromised`
-- CybORG: `Remove.py` — only calls `StopProcess`, files persist until `Restore`
+Now matches CybORG: GreenLocalWork false positive sets `host_activity_detected` (which
+maps to the `network_connections` observation field), not `host_has_malware`.
 
-This is tested behavior (test_blue_remove.py validates malware clearing).
+## ~~Service Reliability Degradation~~ RESOLVED
 
-## Green Agent: False Positive Observation Field
-
-CybORG's `GreenLocalWork` false positive creates a `process_creation` event, which
-Monitor picks up as a network_connections observation (the `_get_connections` path in
-BlueFlatWrapper).
-
-The JAX implementation sets `host_has_malware = True`, which maps to the
-`malicious_processes` observation field instead.
-
-Both result in the blue agent seeing suspicious activity on the host, but in different
-observation indices.
-
-- JAX: `green.py:128-132` — sets `host_has_malware`
-- CybORG: `GreenLocalWork.py` — creates `process_creation` event → `network_connections` obs
-
-## Service Reliability Degradation
-
-CybORG's `DegradeServices` action calls `degrade_service_reliability()` on host services,
-reducing their reliability score. `GreenLocalWork` checks service reliability before
-executing (step 2), so degraded services can cause green actions to fail silently before
-the FP/phishing checks run.
-
-The JAX implementation does not model service reliability. `DegradeServices` only sets the
-activity detection flag. Green agents always have a chance to trigger FP/phishing when
-services exist on the host.
-
-- JAX: `red_degrade.py` — sets activity flag only
-- CybORG: `DegradeServices.py` → `Host.degrade_service_reliability()`
-- JAX: `green.py` — checks `jnp.any(state.host_services[host_idx])` (binary)
-- CybORG: `GreenLocalWork.py` step 2 — checks `service.active` and reliability
+Now matches CybORG: `host_service_reliability` tracks per-service reliability (0-100,
+default 100). `DegradeServices` decrements by 20 (clamped to 0). `GreenLocalWork` picks
+a random active service and checks `randint(0, 100) < reliability` before executing.
+`Restore` resets reliability to 100.
 
 ## Privilege Escalation: No Sandbox Check
 

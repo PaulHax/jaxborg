@@ -2,11 +2,10 @@ import argparse
 from statistics import mean, stdev
 
 import numpy as np
-
 from CybORG import CybORG
-from CybORG.Agents import SleepAgent, EnterpriseGreenAgent, FiniteStateRedAgent
-from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Agents.Wrappers import BlueFlatWrapper
+from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 EPISODE_LENGTH = 500
 

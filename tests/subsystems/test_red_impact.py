@@ -57,19 +57,19 @@ def _setup_privileged_state(jax_const, target_host):
 
     target_subnet = int(jax_const.host_subnet[target_host])
     discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
-    state = apply_red_action(state, jax_const, 0, discover_idx)
+    state = apply_red_action(state, jax_const, 0, discover_idx, jax.random.PRNGKey(0))
     state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
     scan_idx = encode_red_action("DiscoverNetworkServices", target_host, 0)
-    state = apply_red_action(state, jax_const, 0, scan_idx)
+    state = apply_red_action(state, jax_const, 0, scan_idx, jax.random.PRNGKey(0))
     state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
     exploit_idx = encode_red_action("ExploitRemoteService_cc4SSHBruteForce", target_host, 0)
-    state = apply_red_action(state, jax_const, 0, exploit_idx)
+    state = apply_red_action(state, jax_const, 0, exploit_idx, jax.random.PRNGKey(0))
     state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
     privesc_idx = encode_red_action("PrivilegeEscalate", target_host, 0)
-    state = apply_red_action(state, jax_const, 0, privesc_idx)
+    state = apply_red_action(state, jax_const, 0, privesc_idx, jax.random.PRNGKey(0))
     state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
     return state
@@ -135,7 +135,7 @@ class TestApplyImpact:
         assert bool(state.host_services[target, OT_SVC])
 
         action_idx = encode_red_action("Impact", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx)
+        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert not bool(new_state.host_services[target, OT_SVC])
         assert bool(new_state.ot_service_stopped[target])
@@ -147,7 +147,7 @@ class TestApplyImpact:
 
         state = _setup_privileged_state(jax_const, target)
         action_idx = encode_red_action("Impact", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx)
+        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert int(new_state.red_activity_this_step[target]) == ACTIVITY_EXPLOIT
 
     def test_impact_fails_without_privileged_access(self, jax_const):
@@ -164,7 +164,7 @@ class TestApplyImpact:
         state = state.replace(red_sessions=red_sessions, red_privilege=red_privilege)
 
         action_idx = encode_red_action("Impact", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx)
+        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert bool(new_state.host_services[target, OT_SVC])
         assert not bool(new_state.ot_service_stopped[target])
@@ -178,7 +178,7 @@ class TestApplyImpact:
         state = state.replace(host_services=jnp.array(jax_const.initial_services))
 
         action_idx = encode_red_action("Impact", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx)
+        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert bool(new_state.host_services[target, OT_SVC])
         assert not bool(new_state.ot_service_stopped[target])
@@ -193,7 +193,7 @@ class TestApplyImpact:
         assert not bool(state.host_services[target, OT_SVC])
 
         action_idx = encode_red_action("Impact", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx)
+        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert not bool(new_state.ot_service_stopped[target])
         assert int(new_state.red_activity_this_step[target]) == ACTIVITY_NONE
@@ -205,12 +205,12 @@ class TestApplyImpact:
 
         state = _setup_privileged_state(jax_const, target)
         action_idx = encode_red_action("Impact", target, 0)
-        state1 = apply_red_action(state, jax_const, 0, action_idx)
+        state1 = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert bool(state1.ot_service_stopped[target])
         assert not bool(state1.host_services[target, OT_SVC])
 
         state1 = state1.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
-        state2 = apply_red_action(state1, jax_const, 0, action_idx)
+        state2 = apply_red_action(state1, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert int(state2.red_activity_this_step[target]) == ACTIVITY_NONE
 
     def test_impact_does_not_affect_other_agents(self, jax_const):
@@ -220,7 +220,7 @@ class TestApplyImpact:
 
         state = _setup_privileged_state(jax_const, target)
         action_idx = encode_red_action("Impact", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx)
+        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         for agent in range(1, NUM_RED_AGENTS):
             np.testing.assert_array_equal(
@@ -239,7 +239,7 @@ class TestApplyImpact:
 
         state = _setup_privileged_state(jax_const, target)
         action_idx = encode_red_action("Impact", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx)
+        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         for h in range(jax_const.num_hosts):
             if h == target:
@@ -255,7 +255,7 @@ class TestApplyImpact:
         state = _setup_privileged_state(jax_const, target)
         action_idx = encode_red_action("Impact", target, 0)
         jitted = jax.jit(apply_red_action, static_argnums=(2,))
-        new_state = jitted(state, jax_const, 0, action_idx)
+        new_state = jitted(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert not bool(new_state.host_services[target, OT_SVC])
         assert bool(new_state.ot_service_stopped[target])
 
@@ -272,7 +272,7 @@ class TestImpactChain:
         assert bool(state.host_services[target, OT_SVC])
 
         impact_idx = encode_red_action("Impact", target, 0)
-        state = apply_red_action(state, jax_const, 0, impact_idx)
+        state = apply_red_action(state, jax_const, 0, impact_idx, jax.random.PRNGKey(0))
 
         assert not bool(state.host_services[target, OT_SVC])
         assert bool(state.ot_service_stopped[target])
@@ -363,7 +363,7 @@ class TestDifferentialWithCybORG:
         cyborg_success = cyborg_obs.success
 
         impact_idx = encode_red_action("Impact", target_h, 0)
-        new_state = apply_red_action(state, const, 0, impact_idx)
+        new_state = apply_red_action(state, const, 0, impact_idx, jax.random.PRNGKey(0))
 
         jax_stopped = bool(new_state.ot_service_stopped[target_h])
         jax_svc_off = not bool(new_state.host_services[target_h, OT_SVC])
@@ -393,7 +393,7 @@ class TestDifferentialWithCybORG:
         impact.execute(cyborg_state)
 
         impact_idx = encode_red_action("Impact", target_h, 0)
-        new_state = apply_red_action(state, const, 0, impact_idx)
+        new_state = apply_red_action(state, const, 0, impact_idx, jax.random.PRNGKey(0))
 
         cyborg_ot_after = any(
             svc.active for sname, svc in cyborg_host.services.items() if sname == ProcessName.OTSERVICE
@@ -416,7 +416,7 @@ class TestDifferentialWithCybORG:
         cyborg_success = cyborg_obs.success == True  # noqa: E712
 
         impact_idx = encode_red_action("Impact", target_h, 0)
-        new_state = apply_red_action(state, const, 0, impact_idx)
+        new_state = apply_red_action(state, const, 0, impact_idx, jax.random.PRNGKey(0))
         jax_stopped = bool(new_state.ot_service_stopped[target_h])
 
         assert not jax_stopped
@@ -437,7 +437,7 @@ class TestDifferentialWithCybORG:
         cyborg_success = cyborg_obs.success == True  # noqa: E712
 
         impact_idx = encode_red_action("Impact", target_h, 0)
-        new_state = apply_red_action(state, const, 0, impact_idx)
+        new_state = apply_red_action(state, const, 0, impact_idx, jax.random.PRNGKey(0))
         jax_stopped = bool(new_state.ot_service_stopped[target_h])
 
         assert not jax_stopped and not cyborg_success
@@ -471,7 +471,7 @@ class TestDifferentialWithCybORG:
         cyborg_success = cyborg_obs.success == True  # noqa: E712
 
         impact_idx = encode_red_action("Impact", target_h, 0)
-        new_state = apply_red_action(state, const, 0, impact_idx)
+        new_state = apply_red_action(state, const, 0, impact_idx, jax.random.PRNGKey(0))
         jax_stopped = bool(new_state.ot_service_stopped[target_h])
         jax_svc_still_on = bool(new_state.host_services[target_h, OT_SVC])
 
@@ -492,7 +492,7 @@ class TestDifferentialWithCybORG:
         assert cyborg_obs1.success
 
         impact_idx = encode_red_action("Impact", target_h, 0)
-        state = apply_red_action(state, const, 0, impact_idx)
+        state = apply_red_action(state, const, 0, impact_idx, jax.random.PRNGKey(0))
         assert bool(state.ot_service_stopped[target_h])
         assert not bool(state.host_services[target_h, OT_SVC])
 
@@ -500,7 +500,7 @@ class TestDifferentialWithCybORG:
 
         impact.execute(cyborg_state)
 
-        state2 = apply_red_action(state, const, 0, impact_idx)
+        state2 = apply_red_action(state, const, 0, impact_idx, jax.random.PRNGKey(0))
         bool(state2.host_services[target_h, OT_SVC]) != bool(state.host_services[target_h, OT_SVC])
 
         cyborg_host = cyborg_state.hosts[target_hostname]

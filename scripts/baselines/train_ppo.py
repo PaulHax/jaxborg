@@ -1,23 +1,23 @@
 import os
-from pathlib import Path
 import warnings
+from pathlib import Path
 
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-
+import hydra
+import pettingzoo
 import torch
 from CybORG import CybORG
-from CybORG.Agents import SleepAgent, EnterpriseGreenAgent, FiniteStateRedAgent
-from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Agents.Wrappers import BlueFlatWrapper
-import pettingzoo
+from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+from gymnasium.spaces import Space
+from omegaconf import DictConfig
 from pettingzoo import ParallelEnv
 from pettingzoo.utils import parallel_to_aec
-from gymnasium.spaces import Space
 from sb3_contrib import MaskablePPO
 from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
 from sb3_contrib.common.wrappers import ActionMasker
-import hydra
-from omegaconf import DictConfig
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
 class CybORGPzShim(ParallelEnv):
@@ -62,10 +62,7 @@ class CybORGPzShim(ParallelEnv):
 
     @property
     def action_masks(self) -> dict[str, torch.Tensor]:
-        return {
-            a: torch.tensor(self.env.action_masks[a], dtype=torch.bool)
-            for a in self.env.agents
-        }
+        return {a: torch.tensor(self.env.action_masks[a], dtype=torch.bool) for a in self.env.agents}
 
 
 class SB3ActionMaskWrapper(pettingzoo.utils.BaseWrapper):

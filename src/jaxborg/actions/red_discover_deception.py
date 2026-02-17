@@ -1,8 +1,13 @@
 import chex
+import jax
 import jax.numpy as jnp
 
 from jaxborg.actions.red_common import can_reach_subnet
+from jaxborg.actions.rng import sample_detection_random
 from jaxborg.state import CC4Const, CC4State
+
+DECEPTION_TP_RATE = 0.5
+DECEPTION_FP_RATE = 0.1
 
 
 def apply_discover_deception(
@@ -10,6 +15,7 @@ def apply_discover_deception(
     const: CC4Const,
     agent_id: int,
     target_host: chex.Array,
+    key: jax.Array,
 ) -> CC4State:
     is_active = const.host_active[target_host]
     is_scanned = state.red_scanned_hosts[agent_id, target_host]
@@ -18,7 +24,12 @@ def apply_discover_deception(
 
     success = is_active & is_scanned & can_reach
     has_decoys = jnp.any(state.host_decoys[target_host])
-    detected = success & has_decoys
+
+    k1, k2 = jax.random.split(key)
+    r1, state = sample_detection_random(state, k1)
+    r2, state = sample_detection_random(state, k2)
+
+    detected = success & ((has_decoys & (r1 < DECEPTION_TP_RATE)) | (~has_decoys & (r2 < DECEPTION_FP_RATE)))
 
     return state.replace(
         fsm_host_states=jnp.where(

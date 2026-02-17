@@ -25,6 +25,7 @@ from jaxborg.constants import (
     COMPROMISE_PRIVILEGED,
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
+    MAX_DETECTION_RANDOMS,
 )
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_topology
@@ -43,7 +44,7 @@ def jax_state_with_discovered(jax_const):
     state = state.replace(red_sessions=red_sessions)
     start_subnet = int(jax_const.host_subnet[start_host])
     discover_idx = encode_red_action("DiscoverRemoteSystems", start_subnet, 0)
-    state = apply_red_action(state, jax_const, 0, discover_idx)
+    state = apply_red_action(state, jax_const, 0, discover_idx, jax.random.PRNGKey(0))
     state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
     return state
 
@@ -77,8 +78,15 @@ class TestApplyAggressiveScan:
         target = _first_discovered_non_router(jax_const, state)
         assert target is not None
 
+        randoms = jnp.full(MAX_DETECTION_RANDOMS, 0.1)
+        state = state.replace(
+            detection_randoms=randoms,
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
+            use_detection_randoms=jnp.array(True),
+        )
+
         action_idx = encode_red_action("AggressiveServiceDiscovery", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx)
+        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert bool(new_state.red_scanned_hosts[0, target])
         assert int(new_state.red_activity_this_step[target]) == ACTIVITY_SCAN
@@ -95,7 +103,7 @@ class TestApplyAggressiveScan:
             pytest.skip("All hosts discovered")
 
         action_idx = encode_red_action("AggressiveServiceDiscovery", undiscovered, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx)
+        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert not bool(new_state.red_scanned_hosts[0, undiscovered])
 
     def test_jit_compatible(self, jax_const, jax_state_with_discovered):
@@ -105,7 +113,7 @@ class TestApplyAggressiveScan:
 
         action_idx = encode_red_action("AggressiveServiceDiscovery", target, 0)
         jitted = jax.jit(apply_red_action, static_argnums=(2,))
-        new_state = jitted(state, jax_const, 0, action_idx)
+        new_state = jitted(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert bool(new_state.red_scanned_hosts[0, target])
 
 
@@ -120,13 +128,20 @@ class TestStealthScanEncoding:
 
 
 class TestApplyStealthScan:
-    def test_marks_scanned_no_activity(self, jax_const, jax_state_with_discovered):
+    def test_marks_scanned_no_activity_when_undetected(self, jax_const, jax_state_with_discovered):
         state = jax_state_with_discovered
         target = _first_discovered_non_router(jax_const, state)
         assert target is not None
 
+        randoms = jnp.full(MAX_DETECTION_RANDOMS, 0.9)
+        state = state.replace(
+            detection_randoms=randoms,
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
+            use_detection_randoms=jnp.array(True),
+        )
+
         action_idx = encode_red_action("StealthServiceDiscovery", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx)
+        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert bool(new_state.red_scanned_hosts[0, target])
         assert int(new_state.red_activity_this_step[target]) == 0
@@ -138,7 +153,7 @@ class TestApplyStealthScan:
 
         action_idx = encode_red_action("StealthServiceDiscovery", target, 0)
         jitted = jax.jit(apply_red_action, static_argnums=(2,))
-        new_state = jitted(state, jax_const, 0, action_idx)
+        new_state = jitted(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert bool(new_state.red_scanned_hosts[0, target])
 
 
@@ -158,6 +173,7 @@ class TestApplyDiscoverDeception:
         target = _first_discovered_non_router(jax_const, state)
         assert target is not None
 
+        randoms = jnp.full(MAX_DETECTION_RANDOMS, 0.1)
         scanned = state.red_scanned_hosts.at[0, target].set(True)
         decoys = state.host_decoys.at[target, 0].set(True)
         fsm = state.fsm_host_states.at[0, target].set(FSM_S)
@@ -165,10 +181,13 @@ class TestApplyDiscoverDeception:
             red_scanned_hosts=scanned,
             host_decoys=decoys,
             fsm_host_states=fsm,
+            detection_randoms=randoms,
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
+            use_detection_randoms=jnp.array(True),
         )
 
         action_idx = encode_red_action("DiscoverDeception", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx)
+        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert int(new_state.fsm_host_states[0, target]) == FSM_SD
 
@@ -177,15 +196,19 @@ class TestApplyDiscoverDeception:
         target = _first_discovered_non_router(jax_const, state)
         assert target is not None
 
+        randoms = jnp.full(MAX_DETECTION_RANDOMS, 0.9)
         scanned = state.red_scanned_hosts.at[0, target].set(True)
         fsm = state.fsm_host_states.at[0, target].set(FSM_S)
         state = state.replace(
             red_scanned_hosts=scanned,
             fsm_host_states=fsm,
+            detection_randoms=randoms,
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
+            use_detection_randoms=jnp.array(True),
         )
 
         action_idx = encode_red_action("DiscoverDeception", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx)
+        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert int(new_state.fsm_host_states[0, target]) == FSM_S
 
@@ -194,6 +217,7 @@ class TestApplyDiscoverDeception:
         target = _first_discovered_non_router(jax_const, state)
         assert target is not None
 
+        randoms = jnp.full(MAX_DETECTION_RANDOMS, 0.1)
         scanned = state.red_scanned_hosts.at[0, target].set(True)
         decoys = state.host_decoys.at[target, 0].set(True)
         fsm = state.fsm_host_states.at[0, target].set(FSM_K)
@@ -201,11 +225,14 @@ class TestApplyDiscoverDeception:
             red_scanned_hosts=scanned,
             host_decoys=decoys,
             fsm_host_states=fsm,
+            detection_randoms=randoms,
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
+            use_detection_randoms=jnp.array(True),
         )
 
         action_idx = encode_red_action("DiscoverDeception", target, 0)
         jitted = jax.jit(apply_red_action, static_argnums=(2,))
-        new_state = jitted(state, jax_const, 0, action_idx)
+        new_state = jitted(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert int(new_state.fsm_host_states[0, target]) == FSM_KD
 
 
@@ -235,7 +262,7 @@ class TestApplyDegrade:
         )
 
         action_idx = encode_red_action("DegradeServices", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx)
+        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert int(new_state.red_activity_this_step[target]) == 2
 
@@ -254,7 +281,7 @@ class TestApplyDegrade:
         )
 
         action_idx = encode_red_action("DegradeServices", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx)
+        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert int(new_state.red_activity_this_step[target]) == 0
 
@@ -274,7 +301,7 @@ class TestApplyDegrade:
 
         action_idx = encode_red_action("DegradeServices", target, 0)
         jitted = jax.jit(apply_red_action, static_argnums=(2,))
-        new_state = jitted(state, jax_const, 0, action_idx)
+        new_state = jitted(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert int(new_state.red_activity_this_step[target]) == 2
 
 
@@ -304,7 +331,7 @@ class TestApplyWithdraw:
         )
 
         action_idx = encode_red_action("Withdraw", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx)
+        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert not bool(new_state.red_sessions[0, target])
         assert int(new_state.red_privilege[0, target]) == COMPROMISE_NONE
@@ -316,7 +343,7 @@ class TestApplyWithdraw:
         assert target is not None
 
         action_idx = encode_red_action("Withdraw", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx)
+        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert not bool(new_state.red_sessions[0, target])
         assert int(new_state.red_privilege[0, target]) == COMPROMISE_NONE
@@ -331,7 +358,7 @@ class TestApplyWithdraw:
         state = state.replace(red_sessions=red_sessions)
 
         action_idx = encode_red_action("Withdraw", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx)
+        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert not bool(new_state.red_sessions[0, target])
         assert bool(new_state.red_sessions[1, target])
@@ -347,5 +374,5 @@ class TestApplyWithdraw:
 
         action_idx = encode_red_action("Withdraw", target, 0)
         jitted = jax.jit(apply_red_action, static_argnums=(2,))
-        new_state = jitted(state, jax_const, 0, action_idx)
+        new_state = jitted(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert not bool(new_state.red_sessions[0, target])

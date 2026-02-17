@@ -55,6 +55,12 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         state.ot_service_stopped,
     )
 
+    host_service_reliability = jnp.where(
+        covers_host,
+        state.host_service_reliability.at[target_host].set(100),
+        state.host_service_reliability,
+    )
+
     return state.replace(
         host_compromised=host_compromised,
         red_sessions=red_sessions,
@@ -64,4 +70,5 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         host_decoys=host_decoys,
         host_activity_detected=host_activity_detected,
         ot_service_stopped=ot_service_stopped,
+        host_service_reliability=host_service_reliability,
     )

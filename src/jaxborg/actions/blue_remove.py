@@ -30,15 +30,8 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         state.host_compromised,
     )
 
-    new_malware = jnp.where(
-        covers_host & ~any_compromised,
-        state.host_has_malware.at[target_host].set(False),
-        state.host_has_malware,
-    )
-
     return state.replace(
         red_sessions=new_sessions,
         red_privilege=new_privilege,
         host_compromised=new_host_compromised,
-        host_has_malware=new_malware,
     )

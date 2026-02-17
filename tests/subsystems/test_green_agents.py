@@ -53,20 +53,19 @@ class TestGreenAgentBasics:
     def test_no_crash_on_initial_state(self, jax_const, jax_state):
         key = jax.random.PRNGKey(0)
         new_state = apply_green_agents(jax_state, jax_const, key)
-        assert new_state.host_has_malware.shape == (GLOBAL_MAX_HOSTS,)
+        assert new_state.host_activity_detected.shape == (GLOBAL_MAX_HOSTS,)
 
     def test_jit_compatible(self, jax_const, jax_state):
         key = jax.random.PRNGKey(0)
         jitted = jax.jit(apply_green_agents)
         new_state = jitted(jax_state, jax_const, key)
-        assert new_state.host_has_malware.shape == (GLOBAL_MAX_HOSTS,)
+        assert new_state.host_activity_detected.shape == (GLOBAL_MAX_HOSTS,)
 
     def test_deterministic_with_same_key(self, jax_const, jax_state):
         key = jax.random.PRNGKey(123)
         jitted = jax.jit(apply_green_agents)
         s1 = jitted(jax_state, jax_const, key)
         s2 = jitted(jax_state, jax_const, key)
-        np.testing.assert_array_equal(np.array(s1.host_has_malware), np.array(s2.host_has_malware))
         np.testing.assert_array_equal(np.array(s1.host_activity_detected), np.array(s2.host_activity_detected))
         np.testing.assert_array_equal(np.array(s1.red_sessions), np.array(s2.red_sessions))
 
@@ -76,7 +75,7 @@ class TestGreenAgentBasics:
         for seed in range(20):
             key = jax.random.PRNGKey(seed)
             s = jitted(jax_state, jax_const, key)
-            results.append(int(jnp.sum(s.host_has_malware)) + int(jnp.sum(s.host_activity_detected)))
+            results.append(int(jnp.sum(s.host_activity_detected)))
         assert len(set(results)) > 1
 
     def test_inactive_hosts_unchanged(self, jax_const, jax_state):
@@ -84,13 +83,13 @@ class TestGreenAgentBasics:
         new_state = apply_green_agents(jax_state, jax_const, key)
         for h in range(GLOBAL_MAX_HOSTS):
             if not jax_const.green_agent_active[h]:
-                assert not new_state.host_has_malware[h] or jax_state.host_has_malware[h]
+                assert not new_state.host_activity_detected[h] or jax_state.host_activity_detected[h]
 
 
 class TestGreenLocalWorkFalsePositive:
     def test_fp_rate_statistical(self, jax_const, jax_state):
         results = _run_many_green(jax_state, jax_const, num_trials=50)
-        fp_count = sum(int(jnp.sum(r.host_has_malware & ~jax_state.host_has_malware)) for r in results)
+        fp_count = sum(int(jnp.sum(r.host_activity_detected & ~jax_state.host_activity_detected)) for r in results)
         assert fp_count > 0, "Expected at least some false positives over 50 steps"
 
 

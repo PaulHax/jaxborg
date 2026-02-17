@@ -85,13 +85,13 @@ def _find_blue_for_host(const, host):
 def _setup_exploit(state, const, target_h):
     target_subnet = int(const.host_subnet[target_h])
     discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
-    state = apply_red_action(state, const, 0, discover_idx)
+    state = apply_red_action(state, const, 0, discover_idx, jax.random.PRNGKey(0))
     state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
     scan_idx = encode_red_action("DiscoverNetworkServices", target_h, 0)
-    state = apply_red_action(state, const, 0, scan_idx)
+    state = apply_red_action(state, const, 0, scan_idx, jax.random.PRNGKey(0))
     state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
     exploit_idx = encode_red_action("ExploitRemoteService_cc4SSHBruteForce", target_h, 0)
-    state = apply_red_action(state, const, 0, exploit_idx)
+    state = apply_red_action(state, const, 0, exploit_idx, jax.random.PRNGKey(0))
     return state
 
 
@@ -126,7 +126,7 @@ class TestApplyBlueRemove:
         assert not bool(new_state.red_sessions[0, target])
         assert int(new_state.red_privilege[0, target]) == COMPROMISE_NONE
         assert int(new_state.host_compromised[target]) == COMPROMISE_NONE
-        assert not bool(new_state.host_has_malware[target])
+        assert bool(new_state.host_has_malware[target])
 
     def test_remove_does_not_clear_privileged_session(self, jax_const):
         state = _make_jax_state(jax_const)

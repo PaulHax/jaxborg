@@ -83,7 +83,7 @@ class TestHasAnySession:
 
 class TestApplyDiscover:
     def test_sleep_no_state_change(self, jax_const, jax_state):
-        new_state = apply_red_action(jax_state, jax_const, 0, RED_SLEEP)
+        new_state = apply_red_action(jax_state, jax_const, 0, RED_SLEEP, jax.random.PRNGKey(0))
         np.testing.assert_array_equal(
             np.array(new_state.red_discovered_hosts),
             np.array(jax_state.red_discovered_hosts),
@@ -93,7 +93,7 @@ class TestApplyDiscover:
         start_host = int(jax_const.red_start_hosts[0])
         start_subnet = int(jax_const.host_subnet[start_host])
         action_idx = encode_red_action("DiscoverRemoteSystems", start_subnet, 0)
-        new_state = apply_red_action(jax_state, jax_const, 0, action_idx)
+        new_state = apply_red_action(jax_state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         discovered = np.array(new_state.red_discovered_hosts[0])
         for h in range(jax_const.num_hosts):
@@ -108,7 +108,7 @@ class TestApplyDiscover:
         start_host = int(jax_const.red_start_hosts[0])
         start_subnet = int(jax_const.host_subnet[start_host])
         action_idx = encode_red_action("DiscoverRemoteSystems", start_subnet, 0)
-        new_state = apply_red_action(jax_state, jax_const, 0, action_idx)
+        new_state = apply_red_action(jax_state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         discovered = np.array(new_state.red_discovered_hosts[0])
         for h in range(jax_const.num_hosts):
@@ -125,7 +125,7 @@ class TestApplyDiscover:
 
         target_subnet = reachable[0]
         action_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
-        new_state = apply_red_action(jax_state, jax_const, 0, action_idx)
+        new_state = apply_red_action(jax_state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         discovered = np.array(new_state.red_discovered_hosts[0])
         for h in range(jax_const.num_hosts):
@@ -139,7 +139,7 @@ class TestApplyDiscover:
     def test_discover_without_session_no_change(self, jax_const):
         state = create_initial_state()
         action_idx = encode_red_action("DiscoverRemoteSystems", SUBNET_IDS["CONTRACTOR_NETWORK"], 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx)
+        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         np.testing.assert_array_equal(
             np.array(new_state.red_discovered_hosts),
@@ -150,7 +150,7 @@ class TestApplyDiscover:
         start_host = int(jax_const.red_start_hosts[0])
         start_subnet = int(jax_const.host_subnet[start_host])
         action_idx = encode_red_action("DiscoverRemoteSystems", start_subnet, 0)
-        new_state = apply_red_action(jax_state, jax_const, 0, action_idx)
+        new_state = apply_red_action(jax_state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         activity = np.array(new_state.red_activity_this_step)
         for h in range(jax_const.num_hosts):
@@ -165,8 +165,8 @@ class TestApplyDiscover:
         start_host = int(jax_const.red_start_hosts[0])
         start_subnet = int(jax_const.host_subnet[start_host])
         action_idx = encode_red_action("DiscoverRemoteSystems", start_subnet, 0)
-        state1 = apply_red_action(jax_state, jax_const, 0, action_idx)
-        state2 = apply_red_action(state1, jax_const, 0, action_idx)
+        state1 = apply_red_action(jax_state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        state2 = apply_red_action(state1, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         np.testing.assert_array_equal(
             np.array(state1.red_discovered_hosts),
             np.array(state2.red_discovered_hosts),
@@ -176,7 +176,7 @@ class TestApplyDiscover:
         start_host = int(jax_const.red_start_hosts[0])
         start_subnet = int(jax_const.host_subnet[start_host])
         action_idx = encode_red_action("DiscoverRemoteSystems", start_subnet, 0)
-        new_state = apply_red_action(jax_state, jax_const, 0, action_idx)
+        new_state = apply_red_action(jax_state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         for agent in range(1, NUM_RED_AGENTS):
             np.testing.assert_array_equal(
@@ -189,7 +189,7 @@ class TestApplyDiscover:
         start_subnet = int(jax_const.host_subnet[start_host])
         action_idx = encode_red_action("DiscoverRemoteSystems", start_subnet, 0)
         jitted = jax.jit(apply_red_action, static_argnums=(2,))
-        new_state = jitted(jax_state, jax_const, 0, action_idx)
+        new_state = jitted(jax_state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         discovered = np.array(new_state.red_discovered_hosts[0])
         assert np.any(discovered)
 
@@ -231,7 +231,7 @@ class TestDifferentialWithCybORG:
         obs = results.observation
 
         action_idx = encode_red_action("DiscoverRemoteSystems", sid, 0)
-        jax_new_state = apply_red_action(state, const, 0, action_idx)
+        jax_new_state = apply_red_action(state, const, 0, action_idx, jax.random.PRNGKey(0))
 
         cyborg_discovered_ips = set()
         for key, val in obs.items():
@@ -284,7 +284,7 @@ class TestDifferentialWithCybORG:
                 cyborg_discovered_hostnames.add(cyborg_state.ip_addresses[ip])
 
         action_idx = encode_red_action("DiscoverRemoteSystems", sid, 0)
-        jax_new_state = apply_red_action(state, const, 0, action_idx)
+        jax_new_state = apply_red_action(state, const, 0, action_idx, jax.random.PRNGKey(0))
 
         sorted_hosts = sorted(cyborg_state.hosts.keys())
         jax_discovered = np.array(jax_new_state.red_discovered_hosts[0])

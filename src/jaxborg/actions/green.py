@@ -5,6 +5,7 @@ from jaxborg.constants import (
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
     NUM_RED_AGENTS,
+    NUM_SERVICES,
     NUM_SUBNETS,
 )
 from jaxborg.state import CC4Const, CC4State
@@ -47,20 +48,31 @@ def _apply_single_green(
     host_idx: jnp.int32,
     key: jax.Array,
 ) -> CC4State:
-    k1, k2, k3, k4, k5 = jax.random.split(key, 5)
+    k1, k2, k3, k4, k5, k_svc, k_rel = jax.random.split(key, 7)
 
     action = jax.random.randint(k1, (), 0, NUM_GREEN_ACTIONS)
 
     has_service = jnp.any(state.host_services[host_idx])
 
+    active_services = state.host_services[host_idx]
+    num_active = jnp.sum(active_services)
+    svc_indices = jnp.where(active_services, jnp.arange(NUM_SERVICES), NUM_SERVICES)
+    sorted_svcs = jnp.sort(svc_indices)
+    svc_rand_idx = jax.random.randint(k_svc, (), 0, jnp.maximum(num_active, 1))
+    chosen_svc = sorted_svcs[svc_rand_idx]
+    chosen_svc = jnp.where(has_service, chosen_svc, jnp.int32(0))
+    svc_reliability = state.host_service_reliability[host_idx, chosen_svc]
+    rel_roll = jax.random.randint(k_rel, (), 0, 100)
+    work_succeeds = has_service & (rel_roll < svc_reliability)
+
     # -- GreenLocalWork --
     fp_roll = jax.random.uniform(k2)
     fp_triggered = fp_roll < FP_DETECTION_RATE
-    local_fp = (action == GREEN_LOCAL_WORK) & has_service & fp_triggered
+    local_fp = (action == GREEN_LOCAL_WORK) & work_succeeds & fp_triggered
 
     phish_roll = jax.random.uniform(k3)
     phish_triggered = phish_roll < PHISHING_ERROR_RATE
-    do_phish = (action == GREEN_LOCAL_WORK) & has_service & phish_triggered
+    do_phish = (action == GREEN_LOCAL_WORK) & work_succeeds & phish_triggered
 
     red_agent = _find_phishing_red_agent(state, const, host_idx)
     any_red_on_host = jnp.any(state.red_sessions[:, host_idx])
@@ -125,17 +137,16 @@ def _apply_single_green(
         host_activity_detected,
     )
 
-    host_has_malware = jnp.where(
+    host_activity_detected = jnp.where(
         local_fp,
-        state.host_has_malware.at[host_idx].set(True),
-        state.host_has_malware,
+        host_activity_detected.at[host_idx].set(True),
+        host_activity_detected,
     )
 
     return state.replace(
         red_sessions=red_sessions,
         red_privilege=red_privilege,
         host_compromised=host_compromised,
-        host_has_malware=host_has_malware,
         host_activity_detected=host_activity_detected,
     )
 

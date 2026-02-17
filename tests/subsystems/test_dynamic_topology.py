@@ -209,7 +209,7 @@ class TestActionHandlersRespectHostActive:
         state = state.replace(red_discovered_hosts=discovered, red_scanned_hosts=scanned)
 
         scan_idx = encode_red_action("DiscoverNetworkServices", inactive_host, 0)
-        new_state = apply_red_action(state, const, 0, scan_idx)
+        new_state = apply_red_action(state, const, 0, scan_idx, jax.random.PRNGKey(0))
         was_scanned = bool(state.red_scanned_hosts[0, inactive_host])
         assert not bool(new_state.red_scanned_hosts[0, inactive_host]) or was_scanned
 
@@ -222,7 +222,7 @@ class TestActionHandlersRespectHostActive:
 
         start_subnet = int(const.host_subnet[start_host])
         discover_idx = encode_red_action("DiscoverRemoteSystems", start_subnet, 0)
-        new_state = apply_red_action(state, const, 0, discover_idx)
+        new_state = apply_red_action(state, const, 0, discover_idx, jax.random.PRNGKey(0))
 
         discovered = np.array(new_state.red_discovered_hosts[0])
         for h in range(GLOBAL_MAX_HOSTS):
@@ -239,7 +239,7 @@ class TestActionHandlersRespectHostActive:
         start_subnet = int(const.host_subnet[start_host])
         discover_idx = encode_red_action("DiscoverRemoteSystems", start_subnet, 0)
         jitted = jax.jit(apply_red_action, static_argnums=(2,))
-        new_state = jitted(state, const, 0, discover_idx)
+        new_state = jitted(state, const, 0, discover_idx, jax.random.PRNGKey(0))
 
         discovered = np.array(new_state.red_discovered_hosts[0])
         for h in range(GLOBAL_MAX_HOSTS):

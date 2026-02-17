@@ -1,9 +1,13 @@
 import chex
+import jax
 import jax.numpy as jnp
 
 from jaxborg.actions.red_common import can_reach_subnet
+from jaxborg.actions.rng import sample_detection_random
 from jaxborg.constants import ACTIVITY_SCAN
 from jaxborg.state import CC4Const, CC4State
+
+AGGRESSIVE_DETECTION_RATE = 0.75
 
 
 def apply_aggressive_scan(
@@ -11,6 +15,7 @@ def apply_aggressive_scan(
     const: CC4Const,
     agent_id: int,
     target_host: chex.Array,
+    key: jax.Array,
 ) -> CC4State:
     is_active = const.host_active[target_host]
     is_discovered = state.red_discovered_hosts[agent_id, target_host]
@@ -23,8 +28,11 @@ def apply_aggressive_scan(
         state.red_scanned_hosts[agent_id, target_host] | success
     )
 
+    rand_val, state = sample_detection_random(state, key)
+    detected = success & (rand_val < AGGRESSIVE_DETECTION_RATE)
+
     activity = jnp.where(
-        success,
+        detected,
         state.red_activity_this_step.at[target_host].set(ACTIVITY_SCAN),
         state.red_activity_this_step,
     )

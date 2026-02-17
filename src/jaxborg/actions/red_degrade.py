@@ -4,6 +4,8 @@ import jax.numpy as jnp
 from jaxborg.constants import ACTIVITY_EXPLOIT, COMPROMISE_PRIVILEGED
 from jaxborg.state import CC4Const, CC4State
 
+DEGRADE_AMOUNT = 20
+
 
 def apply_degrade(
     state: CC4State,
@@ -23,6 +25,14 @@ def apply_degrade(
         state.red_activity_this_step,
     )
 
+    degraded = jnp.maximum(state.host_service_reliability[target_host] - DEGRADE_AMOUNT, 0)
+    reliability = jnp.where(
+        success,
+        state.host_service_reliability.at[target_host].set(degraded),
+        state.host_service_reliability,
+    )
+
     return state.replace(
         red_activity_this_step=activity,
+        host_service_reliability=reliability,
     )

@@ -72,8 +72,10 @@ def apply_red_action(
     const: CC4Const,
     agent_id: int,
     action_idx: int,
+    key: jax.Array,
 ) -> CC4State:
     action_type, target_subnet, target_host = decode_red_action(action_idx, agent_id, const)
+    k_agg, k_stealth, k_deception = jax.random.split(key, 3)
 
     state = jax.lax.cond(
         action_type == ACTION_TYPE_DISCOVER,
@@ -113,21 +115,21 @@ def apply_red_action(
 
     state = jax.lax.cond(
         action_type == ACTION_TYPE_AGGRESSIVE_SCAN,
-        lambda s: apply_aggressive_scan(s, const, agent_id, target_host),
+        lambda s: apply_aggressive_scan(s, const, agent_id, target_host, k_agg),
         lambda s: s,
         state,
     )
 
     state = jax.lax.cond(
         action_type == ACTION_TYPE_STEALTH_SCAN,
-        lambda s: apply_stealth_scan(s, const, agent_id, target_host),
+        lambda s: apply_stealth_scan(s, const, agent_id, target_host, k_stealth),
         lambda s: s,
         state,
     )
 
     state = jax.lax.cond(
         action_type == ACTION_TYPE_DISCOVER_DECEPTION,
-        lambda s: apply_discover_deception(s, const, agent_id, target_host),
+        lambda s: apply_discover_deception(s, const, agent_id, target_host, k_deception),
         lambda s: s,
         state,
     )

@@ -154,11 +154,11 @@ class TestApplyBlueMonitor:
         state = _make_jax_state(jax_const)
         target_subnet = int(jax_const.host_subnet[target])
         discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
-        state = apply_red_action(state, jax_const, 0, discover_idx)
+        state = apply_red_action(state, jax_const, 0, discover_idx, jax.random.PRNGKey(0))
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
         scan_idx = encode_red_action("DiscoverNetworkServices", target, 0)
-        state = apply_red_action(state, jax_const, 0, scan_idx)
+        state = apply_red_action(state, jax_const, 0, scan_idx, jax.random.PRNGKey(0))
 
         assert int(state.red_activity_this_step[target]) == ACTIVITY_SCAN
 
@@ -226,11 +226,11 @@ class TestDifferentialWithCybORG:
 
         target_subnet = int(const.host_subnet[target_h])
         discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
-        state = apply_red_action(state, const, 0, discover_idx)
+        state = apply_red_action(state, const, 0, discover_idx, jax.random.PRNGKey(0))
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
         scan_idx = encode_red_action("DiscoverNetworkServices", target_h, 0)
-        state = apply_red_action(state, const, 0, scan_idx)
+        state = apply_red_action(state, const, 0, scan_idx, jax.random.PRNGKey(0))
         state = apply_blue_monitor(state, const)
 
         jax_detected = {int(h) for h in range(int(const.num_hosts)) if bool(state.host_activity_detected[h])}
@@ -303,12 +303,12 @@ class TestDifferentialWithCybORG:
         for subnet, h in targets.items():
             target_subnet = int(const.host_subnet[h])
             discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
-            state = apply_red_action(state, const, 0, discover_idx)
+            state = apply_red_action(state, const, 0, discover_idx, jax.random.PRNGKey(0))
             state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
         for subnet, h in targets.items():
             scan_idx = encode_red_action("DiscoverNetworkServices", h, 0)
-            state = apply_red_action(state, const, 0, scan_idx)
+            state = apply_red_action(state, const, 0, scan_idx, jax.random.PRNGKey(0))
 
         state = apply_blue_monitor(state, const)
 
@@ -352,13 +352,13 @@ class TestDifferentialWithCybORG:
 
         target_subnet = int(const.host_subnet[target_h])
         discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
-        state = apply_red_action(state, const, 0, discover_idx)
+        state = apply_red_action(state, const, 0, discover_idx, jax.random.PRNGKey(0))
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
         scan_idx = encode_red_action("DiscoverNetworkServices", target_h, 0)
-        state = apply_red_action(state, const, 0, scan_idx)
+        state = apply_red_action(state, const, 0, scan_idx, jax.random.PRNGKey(0))
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
         exploit_idx = encode_red_action("ExploitRemoteService_cc4SSHBruteForce", target_h, 0)
-        state = apply_red_action(state, const, 0, exploit_idx)
+        state = apply_red_action(state, const, 0, exploit_idx, jax.random.PRNGKey(0))
 
         int(state.red_activity_this_step[target_h]) != ACTIVITY_NONE
 

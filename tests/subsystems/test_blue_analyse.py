@@ -292,13 +292,13 @@ class TestDifferentialWithCybORG:
 
         target_subnet = int(const.host_subnet[target_h])
         discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
-        state = apply_red_action(state, const, 0, discover_idx)
+        state = apply_red_action(state, const, 0, discover_idx, jax.random.PRNGKey(0))
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
         scan_idx = encode_red_action("DiscoverNetworkServices", target_h, 0)
-        state = apply_red_action(state, const, 0, scan_idx)
+        state = apply_red_action(state, const, 0, scan_idx, jax.random.PRNGKey(0))
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
         exploit_idx = encode_red_action("ExploitRemoteService_cc4SSHBruteForce", target_h, 0)
-        state = apply_red_action(state, const, 0, exploit_idx)
+        state = apply_red_action(state, const, 0, exploit_idx, jax.random.PRNGKey(0))
 
         blue_idx = None
         for b in range(NUM_BLUE_AGENTS):

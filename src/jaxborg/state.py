@@ -4,6 +4,7 @@ from flax import struct
 
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
+    MAX_DETECTION_RANDOMS,
     MAX_STEPS,
     MESSAGE_LENGTH,
     MISSION_PHASES,
@@ -60,6 +61,7 @@ class CC4State:
 
     host_compromised: chex.Array  # (GLOBAL_MAX_HOSTS,) int — 0=None, 1=User, 2=Privileged
     host_services: chex.Array  # (GLOBAL_MAX_HOSTS, NUM_SERVICES) bool
+    host_service_reliability: chex.Array  # (GLOBAL_MAX_HOSTS, NUM_SERVICES) int32 — 0-100
     host_decoys: chex.Array  # (GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES) bool
     ot_service_stopped: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
 
@@ -76,6 +78,10 @@ class CC4State:
     messages: chex.Array  # (NUM_BLUE_AGENTS, NUM_BLUE_AGENTS, MESSAGE_LENGTH) float
 
     fsm_host_states: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int — FSM state per red agent per host
+
+    detection_randoms: chex.Array  # (MAX_DETECTION_RANDOMS,) float — precomputed sequence
+    detection_random_index: chex.Array  # scalar int — next index to consume
+    use_detection_randoms: chex.Array  # scalar bool — True = use sequence, False = use JAX RNG
 
 
 def create_initial_const() -> CC4Const:
@@ -116,6 +122,7 @@ def create_initial_state() -> CC4State:
         mission_phase=jnp.array(0, dtype=jnp.int32),
         host_compromised=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
         host_services=jnp.zeros((GLOBAL_MAX_HOSTS, NUM_SERVICES), dtype=jnp.bool_),
+        host_service_reliability=jnp.full((GLOBAL_MAX_HOSTS, NUM_SERVICES), 100, dtype=jnp.int32),
         host_decoys=jnp.zeros((GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES), dtype=jnp.bool_),
         ot_service_stopped=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         red_sessions=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
@@ -128,4 +135,7 @@ def create_initial_state() -> CC4State:
         blocked_zones=jnp.zeros((NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_),
         messages=jnp.zeros((NUM_BLUE_AGENTS, NUM_BLUE_AGENTS, MESSAGE_LENGTH), dtype=jnp.float32),
         fsm_host_states=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
+        detection_randoms=jnp.zeros(MAX_DETECTION_RANDOMS, dtype=jnp.float32),
+        detection_random_index=jnp.array(0, dtype=jnp.int32),
+        use_detection_randoms=jnp.array(False),
     )
