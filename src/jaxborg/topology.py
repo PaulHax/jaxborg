@@ -4,10 +4,13 @@ import numpy as np
 
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
+    MAX_SERVER_HOSTS,
+    MAX_USER_HOSTS,
     MISSION_PHASES,
     NUM_BLUE_AGENTS,
     NUM_RED_AGENTS,
     NUM_SUBNETS,
+    OBS_HOSTS_PER_SUBNET,
     SERVICE_IDS,
     SERVICE_NAMES,
     SUBNET_IDS,
@@ -263,6 +266,8 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
     phase_boundaries = _compute_phase_boundaries(scenario.mission_phases)
     allowed_subnet_pairs = _compute_allowed_subnet_pairs(scenario.allowed_subnets_per_mphase)
 
+    obs_host_map = _build_obs_host_map(host_subnet, host_is_server, host_is_user, host_active, num_hosts)
+
     return CC4Const(
         host_active=jnp.array(host_active),
         host_subnet=jnp.array(host_subnet),
@@ -285,6 +290,9 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
         phase_rewards=jnp.array(_build_phase_rewards_from_cyborg(cyborg_env)),
         phase_boundaries=jnp.array(phase_boundaries),
         allowed_subnet_pairs=jnp.array(allowed_subnet_pairs),
+        obs_host_map=jnp.array(obs_host_map),
+        blue_obs_subnets=jnp.array(_build_blue_obs_subnets()),
+        comms_policy=jnp.array(_build_comms_policy()),
         max_steps=500,
         num_hosts=num_hosts,
     )
@@ -454,6 +462,8 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
     phase_boundaries = _compute_phase_boundaries(_compute_mission_phases(num_steps))
     allowed_subnet_pairs = _build_allowed_subnet_pairs_pure()
 
+    obs_host_map = _build_obs_host_map(host_subnet_arr, host_is_server, host_is_user, host_active, num_hosts)
+
     return CC4Const(
         host_active=jnp.array(host_active),
         host_subnet=jnp.array(host_subnet_arr),
@@ -476,6 +486,9 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
         phase_rewards=jnp.array(_build_phase_rewards()),
         phase_boundaries=jnp.array(phase_boundaries),
         allowed_subnet_pairs=jnp.array(allowed_subnet_pairs),
+        obs_host_map=jnp.array(obs_host_map),
+        blue_obs_subnets=jnp.array(_build_blue_obs_subnets()),
+        comms_policy=jnp.array(_build_comms_policy()),
         max_steps=num_steps,
         num_hosts=num_hosts,
     )
@@ -556,6 +569,90 @@ def _build_phase_rewards_from_cyborg(cyborg_env) -> np.ndarray:
             pr[phase, sid, 1] = rewards["ASF"]
             pr[phase, sid, 2] = rewards["RIA"]
     return pr
+
+
+JAX_TO_CYBORG_ORDER = np.array([5, 4, 8, 6, 2, 3, 7, 0, 1], dtype=np.int32)
+
+
+def _build_obs_host_map(
+    host_subnet: np.ndarray,
+    host_is_server: np.ndarray,
+    host_is_user: np.ndarray,
+    host_active: np.ndarray,
+    num_hosts: int,
+) -> np.ndarray:
+    obs_map = np.full((NUM_SUBNETS, OBS_HOSTS_PER_SUBNET), GLOBAL_MAX_HOSTS, dtype=np.int32)
+    for sid in range(NUM_SUBNETS):
+        servers = []
+        users = []
+        for h in range(num_hosts):
+            if not host_active[h] or host_subnet[h] != sid:
+                continue
+            if host_is_server[h]:
+                servers.append(h)
+            elif host_is_user[h]:
+                users.append(h)
+        for i, h in enumerate(servers[:MAX_SERVER_HOSTS]):
+            obs_map[sid, i] = h
+        for i, h in enumerate(users[:MAX_USER_HOSTS]):
+            obs_map[sid, MAX_SERVER_HOSTS + i] = h
+    return obs_map
+
+
+def _build_blue_obs_subnets() -> np.ndarray:
+    result = np.full((NUM_BLUE_AGENTS, 3), -1, dtype=np.int32)
+    for agent_idx, snames in enumerate(BLUE_AGENT_SUBNETS):
+        cyborg_sorted = sorted(CYBORG_SUBNET_SUFFIX[s] for s in snames)
+        for slot, cyborg_name in enumerate(cyborg_sorted):
+            result[agent_idx, slot] = CYBORG_SUFFIX_TO_ID[cyborg_name]
+    return result
+
+
+def _build_comms_policy() -> np.ndarray:
+    S = SUBNET_IDS
+    base_hosts = [
+        "INTERNET",
+        "ADMIN_NETWORK",
+        "OFFICE_NETWORK",
+        "PUBLIC_ACCESS_ZONE",
+        "CONTRACTOR_NETWORK",
+        "RESTRICTED_ZONE_A",
+        "RESTRICTED_ZONE_B",
+    ]
+    base_ids = [S[n] for n in base_hosts]
+
+    adj = np.zeros((MISSION_PHASES, NUM_SUBNETS, NUM_SUBNETS), dtype=bool)
+    for phase in range(MISSION_PHASES):
+        for i_idx in range(len(base_ids)):
+            for j_idx in range(i_idx + 1, len(base_ids)):
+                adj[phase, base_ids[i_idx], base_ids[j_idx]] = True
+                adj[phase, base_ids[j_idx], base_ids[i_idx]] = True
+        adj[phase, S["RESTRICTED_ZONE_A"], S["OPERATIONAL_ZONE_A"]] = True
+        adj[phase, S["OPERATIONAL_ZONE_A"], S["RESTRICTED_ZONE_A"]] = True
+        adj[phase, S["RESTRICTED_ZONE_B"], S["OPERATIONAL_ZONE_B"]] = True
+        adj[phase, S["OPERATIONAL_ZONE_B"], S["RESTRICTED_ZONE_B"]] = True
+
+    remove_phase1 = [
+        (S["RESTRICTED_ZONE_A"], S["OPERATIONAL_ZONE_A"]),
+        (S["RESTRICTED_ZONE_A"], S["CONTRACTOR_NETWORK"]),
+        (S["RESTRICTED_ZONE_A"], S["RESTRICTED_ZONE_B"]),
+        (S["RESTRICTED_ZONE_A"], S["INTERNET"]),
+    ]
+    for a, b in remove_phase1:
+        adj[1, a, b] = False
+        adj[1, b, a] = False
+
+    remove_phase2 = [
+        (S["RESTRICTED_ZONE_B"], S["OPERATIONAL_ZONE_B"]),
+        (S["RESTRICTED_ZONE_B"], S["CONTRACTOR_NETWORK"]),
+        (S["RESTRICTED_ZONE_B"], S["RESTRICTED_ZONE_A"]),
+        (S["RESTRICTED_ZONE_B"], S["INTERNET"]),
+    ]
+    for a, b in remove_phase2:
+        adj[2, a, b] = False
+        adj[2, b, a] = False
+
+    return ~adj
 
 
 def _build_allowed_subnet_pairs_pure() -> np.ndarray:
