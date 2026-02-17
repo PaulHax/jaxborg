@@ -4,12 +4,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 MAX_RETRIES=${MAX_RETRIES:-5}
-MAX_SUBSYSTEMS=${MAX_SUBSYSTEMS:-5}
 COMPLETED=0
 
 CYBORG_PREFIX=".venv/lib/python3.11/site-packages"
 
-while [ $COMPLETED -lt $MAX_SUBSYSTEMS ]; do
+while true; do
     NEXT_JSON=$(uv run python -c "
 import json
 from tests.catalog import get_next_incomplete
@@ -28,7 +27,7 @@ else:
 ")
 
     if [ "$NEXT_JSON" = "DONE" ]; then
-        echo "All 22 subsystems complete!"
+        echo "All subsystems complete!"
         break
     fi
 
@@ -40,7 +39,7 @@ else:
 
     echo ""
     echo "================================================================"
-    echo "  Subsystem $ID: $NAME ($((COMPLETED + 1))/$MAX_SUBSYSTEMS)"
+    echo "  Subsystem $ID: $NAME ($((COMPLETED + 1))/22)"
     echo "  $DESC"
     echo "================================================================"
     echo ""
@@ -64,25 +63,43 @@ $CYBORG_PATHS
 JAX target files to implement/modify:
 $JAX_FILES
 
-Workflow:
-1. Read the CybORG source files to understand the exact behavior.
-   The installed CybORG is at $CYBORG_PREFIX/CybORG/
-   Use Glob and Read to find and read the relevant files.
-2. Read the current JAX target files to understand existing code.
-   Read src/jaxborg/constants.py and src/jaxborg/state.py for the schema.
+## Differential Testing Requirements
+
+Your tests MUST be differential: run the same actions in both CybORG and JAX, then compare results.
+CybORG is installed and importable. Use it as the ground-truth oracle.
+
+Pattern for every test:
+1. Create a CybORG env: EnterpriseScenarioGenerator(blue_agent_class=SleepAgent, green_agent_class=EnterpriseGreenAgent, red_agent_class=FiniteStateRedAgent, steps=500), seed=42
+2. Build JAX const from it: build_const_from_cyborg(cyborg_env)
+3. Create JAX state: create_initial_state() (or appropriate starting state)
+4. Execute the SAME action sequence in both environments
+5. Compare the relevant state fields — they must match
+
+Use tests/conftest.py which provides a cyborg_env fixture.
+See tests/subsystems/test_static_topology.py TestDifferentialWithCybORG for reference.
+
+For action subsystems: inject specific actions into CybORG, apply the same via JAX apply_red_action/apply_blue_action, compare host_compromised, red_sessions, red_privilege, red_activity_this_step, etc.
+
+Do NOT write tests that only check JAX in isolation. Every test must compare JAX output against CybORG output.
+
+## Workflow
+
+1. Read the CybORG source files to understand exact behavior.
+   Installed CybORG is at $CYBORG_PREFIX/CybORG/
+2. Read current JAX target files + src/jaxborg/constants.py + src/jaxborg/state.py for schema.
 3. Implement the JAX code for this subsystem.
-4. Create differential tests in tests/subsystems/test_${NAME}.py
-   The tests should verify JAX behavior matches CybORG where possible.
-   If CybORG is not available, tests should verify JAX logic independently.
+4. Create DIFFERENTIAL tests in tests/subsystems/test_${NAME}.py
+   - Every test must run both CybORG and JAX and compare.
 5. Run: uv run pytest tests/subsystems/test_${NAME}.py -v
-6. Fix any failures until tests pass.
+6. Fix failures until tests pass.
 7. Run: uv run pytest tests/ -v --ignore=tests/test_env_smoke.py to verify no regressions.
 8. Mark subsystem as passing:
    uv run python -c \"from tests.catalog import mark_passing; mark_passing($ID)\"
 9. Commit: git add -A && git commit -m 'subsystem $ID: $NAME'
 
-Important:
-- All host-indexed arrays are padded to GLOBAL_MAX_HOSTS=137, use host_active mask for real hosts
+## Constraints
+
+- All host-indexed arrays padded to GLOBAL_MAX_HOSTS=137, use host_active mask
 - 5 blue agents, 6 red agents (hardcoded, no masking)
 - Use flax.struct.dataclass for state, jax.lax.cond for branching
 - Reference CC2 port at /home/paulhax/src/cyber/jaxmarl/integration/jaxmarl/environments/cage/ for patterns
@@ -108,10 +125,8 @@ Important:
 
     COMPLETED=$((COMPLETED + 1))
     echo ""
-    echo "Subsystem $ID ($NAME) complete. [$COMPLETED/$MAX_SUBSYSTEMS done]"
+    echo "Subsystem $ID ($NAME) complete. [$COMPLETED done]"
 done
 
 echo ""
-echo "Completed $COMPLETED subsystems."
-echo "Review the commits, then press Enter to continue (or Ctrl-C to stop)."
-read -r
+echo "Finished. $COMPLETED subsystems completed."
