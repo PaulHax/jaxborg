@@ -115,11 +115,11 @@ class TestBlueActionEncoding:
         assert encode_blue_action("Monitor", -1, 0) == BLUE_MONITOR
 
     def test_decode_sleep(self, jax_const):
-        action_type = decode_blue_action(BLUE_SLEEP, 0, jax_const)
+        action_type, *_ = decode_blue_action(BLUE_SLEEP, 0, jax_const)
         assert int(action_type) == BLUE_ACTION_TYPE_SLEEP
 
     def test_decode_monitor(self, jax_const):
-        action_type = decode_blue_action(BLUE_MONITOR, 0, jax_const)
+        action_type, *_ = decode_blue_action(BLUE_MONITOR, 0, jax_const)
         assert int(action_type) == BLUE_ACTION_TYPE_MONITOR
 
 
