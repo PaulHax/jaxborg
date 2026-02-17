@@ -1,0 +1,314 @@
+import jax
+import jax.numpy as jnp
+import numpy as np
+import pytest
+
+from jaxborg.actions import apply_blue_action, apply_red_action
+from jaxborg.actions.blue_analyse import apply_blue_analyse
+from jaxborg.actions.encoding import (
+    BLUE_ACTION_TYPE_ANALYSE,
+    BLUE_ANALYSE_START,
+    decode_blue_action,
+    encode_blue_action,
+    encode_red_action,
+)
+from jaxborg.constants import (
+    GLOBAL_MAX_HOSTS,
+    NUM_BLUE_AGENTS,
+    SERVICE_IDS,
+)
+from jaxborg.state import create_initial_state
+from jaxborg.topology import build_const_from_cyborg
+
+try:
+    from CybORG import CybORG
+    from CybORG.Agents import SleepAgent
+    from CybORG.Simulator.Actions.AbstractActions.Analyse import Analyse
+    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
+    HAS_CYBORG = True
+except ImportError:
+    HAS_CYBORG = False
+
+cyborg_required = pytest.mark.skipif(not HAS_CYBORG, reason="CybORG not installed")
+
+SSH_SVC = SERVICE_IDS["SSHD"]
+
+
+def _make_cyborg_env():
+    sg = EnterpriseScenarioGenerator(
+        blue_agent_class=SleepAgent,
+        green_agent_class=SleepAgent,
+        red_agent_class=SleepAgent,
+        steps=500,
+    )
+    return CybORG(scenario_generator=sg, seed=42)
+
+
+@pytest.fixture
+def jax_const():
+    return build_const_from_cyborg(_make_cyborg_env())
+
+
+def _make_jax_state(const):
+    state = create_initial_state()
+    state = state.replace(host_services=jnp.array(const.initial_services))
+    start_host = int(const.red_start_hosts[0])
+    red_sessions = state.red_sessions.at[0, start_host].set(True)
+    return state.replace(red_sessions=red_sessions)
+
+
+def _find_host_in_subnet(const, subnet_name, exclude_router=True):
+    from jaxborg.constants import SUBNET_IDS
+
+    sid = SUBNET_IDS[subnet_name]
+    for h in range(int(const.num_hosts)):
+        if not bool(const.host_active[h]):
+            continue
+        if int(const.host_subnet[h]) != sid:
+            continue
+        if exclude_router and bool(const.host_is_router[h]):
+            continue
+        return h
+    return None
+
+
+def _find_exploitable_monitored_host(const):
+    for h in range(int(const.num_hosts)):
+        if (
+            bool(const.host_active[h])
+            and not bool(const.host_is_router[h])
+            and bool(const.initial_services[h, SSH_SVC])
+            and bool(const.host_has_bruteforceable_user[h])
+            and h != int(const.red_start_hosts[0])
+            and bool(jnp.any(const.blue_agent_hosts[:, h]))
+        ):
+            return h
+    return None
+
+
+class TestBlueAnalyseEncoding:
+    def test_encode_analyse(self):
+        assert encode_blue_action("Analyse", 5, 0) == BLUE_ANALYSE_START + 5
+
+    def test_decode_analyse(self, jax_const):
+        action_idx = BLUE_ANALYSE_START + 10
+        action_type, target_host, *_ = decode_blue_action(action_idx, 0, jax_const)
+        assert int(action_type) == BLUE_ACTION_TYPE_ANALYSE
+        assert int(target_host) == 10
+
+    def test_roundtrip(self, jax_const):
+        for h in range(min(int(jax_const.num_hosts), 20)):
+            action_idx = encode_blue_action("Analyse", h, 0)
+            action_type, target_host, *_ = decode_blue_action(action_idx, 0, jax_const)
+            assert int(action_type) == BLUE_ACTION_TYPE_ANALYSE
+            assert int(target_host) == h
+
+
+class TestApplyBlueAnalyse:
+    def test_no_malware_no_detection(self, jax_const):
+        state = _make_jax_state(jax_const)
+        target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A")
+        assert target is not None
+        new_state = apply_blue_analyse(state, jax_const, 0, target)
+        assert not bool(new_state.host_activity_detected[target])
+
+    def test_malware_on_covered_host_detected(self, jax_const):
+        state = _make_jax_state(jax_const)
+        target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A")
+        assert target is not None
+
+        state = state.replace(host_has_malware=state.host_has_malware.at[target].set(True))
+
+        blue_idx = None
+        for b in range(NUM_BLUE_AGENTS):
+            if bool(jax_const.blue_agent_hosts[b, target]):
+                blue_idx = b
+                break
+        assert blue_idx is not None
+
+        new_state = apply_blue_analyse(state, jax_const, blue_idx, target)
+        assert bool(new_state.host_activity_detected[target])
+
+    def test_malware_on_uncovered_host_not_detected(self, jax_const):
+        state = _make_jax_state(jax_const)
+        target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A")
+        assert target is not None
+
+        state = state.replace(host_has_malware=state.host_has_malware.at[target].set(True))
+
+        uncovering_blue = None
+        for b in range(NUM_BLUE_AGENTS):
+            if not bool(jax_const.blue_agent_hosts[b, target]):
+                uncovering_blue = b
+                break
+        assert uncovering_blue is not None
+
+        new_state = apply_blue_analyse(state, jax_const, uncovering_blue, target)
+        assert not bool(new_state.host_activity_detected[target])
+
+    def test_detection_is_cumulative(self, jax_const):
+        state = _make_jax_state(jax_const)
+        target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A")
+        other = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        assert target is not None and other is not None
+
+        state = state.replace(
+            host_activity_detected=state.host_activity_detected.at[other].set(True),
+            host_has_malware=state.host_has_malware.at[target].set(True),
+        )
+
+        blue_idx = None
+        for b in range(NUM_BLUE_AGENTS):
+            if bool(jax_const.blue_agent_hosts[b, target]):
+                blue_idx = b
+                break
+        assert blue_idx is not None
+
+        new_state = apply_blue_analyse(state, jax_const, blue_idx, target)
+        assert bool(new_state.host_activity_detected[target])
+        assert bool(new_state.host_activity_detected[other])
+
+    def test_jit_compatible(self, jax_const):
+        state = _make_jax_state(jax_const)
+        target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A")
+        assert target is not None
+
+        state = state.replace(host_has_malware=state.host_has_malware.at[target].set(True))
+
+        blue_idx = None
+        for b in range(NUM_BLUE_AGENTS):
+            if bool(jax_const.blue_agent_hosts[b, target]):
+                blue_idx = b
+                break
+        assert blue_idx is not None
+
+        jitted = jax.jit(apply_blue_analyse, static_argnums=(2, 3))
+        new_state = jitted(state, jax_const, blue_idx, target)
+        assert bool(new_state.host_activity_detected[target])
+
+
+class TestApplyBlueActionDispatch:
+    def test_analyse_via_dispatch(self, jax_const):
+        state = _make_jax_state(jax_const)
+        target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A")
+        assert target is not None
+
+        state = state.replace(host_has_malware=state.host_has_malware.at[target].set(True))
+
+        blue_idx = None
+        for b in range(NUM_BLUE_AGENTS):
+            if bool(jax_const.blue_agent_hosts[b, target]):
+                blue_idx = b
+                break
+        assert blue_idx is not None
+
+        action_idx = encode_blue_action("Analyse", target, blue_idx)
+        new_state = apply_blue_action(state, jax_const, blue_idx, action_idx)
+        assert bool(new_state.host_activity_detected[target])
+
+    def test_sleep_still_noop(self, jax_const):
+        state = _make_jax_state(jax_const)
+        new_state = apply_blue_action(state, jax_const, 0, 0)
+        np.testing.assert_array_equal(
+            np.array(new_state.host_activity_detected),
+            np.array(state.host_activity_detected),
+        )
+
+
+@cyborg_required
+class TestDifferentialWithCybORG:
+    @pytest.fixture
+    def cyborg_env(self):
+        return _make_cyborg_env()
+
+    @pytest.fixture
+    def cyborg_and_jax(self, cyborg_env):
+        const = build_const_from_cyborg(cyborg_env)
+        state = _make_jax_state(const)
+        return cyborg_env, const, state
+
+    def test_analyse_clean_host_matches_cyborg(self, cyborg_and_jax):
+        cyborg_env, const, state = cyborg_and_jax
+        cyborg_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cyborg_state.hosts.keys())
+
+        target_h = _find_host_in_subnet(const, "RESTRICTED_ZONE_A")
+        assert target_h is not None
+        target_hostname = sorted_hosts[target_h]
+
+        analyse = Analyse(session=0, agent="blue_agent_0", hostname=target_hostname)
+        cyborg_obs = analyse.execute(cyborg_state)
+
+        cyborg_found_malware = False
+        for key, val in cyborg_obs.data.items():
+            if key in ("success", "action"):
+                continue
+            if isinstance(val, dict) and "Files" in val:
+                for f in val["Files"]:
+                    density = f.get("Density", 0)
+                    if density and density > 0.8:
+                        cyborg_found_malware = True
+
+        blue_idx = None
+        for b in range(NUM_BLUE_AGENTS):
+            if bool(const.blue_agent_hosts[b, target_h]):
+                blue_idx = b
+                break
+        assert blue_idx is not None
+
+        new_state = apply_blue_analyse(state, const, blue_idx, target_h)
+        jax_found_malware = bool(new_state.host_activity_detected[target_h])
+
+        assert cyborg_found_malware == jax_found_malware
+
+    def test_analyse_after_exploit_matches_cyborg(self, cyborg_and_jax):
+        cyborg_env, const, state = cyborg_and_jax
+        cyborg_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cyborg_state.hosts.keys())
+
+        target_h = _find_exploitable_monitored_host(const)
+        assert target_h is not None
+        target_hostname = sorted_hosts[target_h]
+
+        target_ip = next(ip for ip, hname in cyborg_state.ip_addresses.items() if hname == target_hostname)
+        from CybORG.Simulator.Actions.ConcreteActions.ExploitActions.SSHBruteForce import SSHBruteForce
+
+        exploit = SSHBruteForce(session=0, agent="red_agent_0", ip_address=target_ip)
+        exploit.execute(cyborg_state)
+
+        analyse = Analyse(session=0, agent="blue_agent_0", hostname=target_hostname)
+        cyborg_obs = analyse.execute(cyborg_state)
+
+        cyborg_found_malware = False
+        for key, val in cyborg_obs.data.items():
+            if key in ("success", "action"):
+                continue
+            if isinstance(val, dict) and "Files" in val:
+                for f in val["Files"]:
+                    density = f.get("Density", 0)
+                    if density and density > 0.8:
+                        cyborg_found_malware = True
+
+        target_subnet = int(const.host_subnet[target_h])
+        discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
+        state = apply_red_action(state, const, 0, discover_idx)
+        state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
+        scan_idx = encode_red_action("DiscoverNetworkServices", target_h, 0)
+        state = apply_red_action(state, const, 0, scan_idx)
+        state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
+        exploit_idx = encode_red_action("ExploitRemoteService_cc4SSHBruteForce", target_h, 0)
+        state = apply_red_action(state, const, 0, exploit_idx)
+
+        blue_idx = None
+        for b in range(NUM_BLUE_AGENTS):
+            if bool(const.blue_agent_hosts[b, target_h]):
+                blue_idx = b
+                break
+        assert blue_idx is not None
+
+        new_state = apply_blue_analyse(state, const, blue_idx, target_h)
+        jax_found_malware = bool(new_state.host_activity_detected[target_h])
+
+        if cyborg_found_malware:
+            assert jax_found_malware, "CybORG found malware but JAX did not"
