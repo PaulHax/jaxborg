@@ -39,6 +39,8 @@ RED_EXPLOIT_BLUEKEEP_START = RED_EXPLOIT_ETERNALBLUE_END
 RED_EXPLOIT_BLUEKEEP_END = RED_EXPLOIT_BLUEKEEP_START + GLOBAL_MAX_HOSTS
 RED_PRIVESC_START = RED_EXPLOIT_BLUEKEEP_END
 RED_PRIVESC_END = RED_PRIVESC_START + GLOBAL_MAX_HOSTS
+RED_IMPACT_START = RED_PRIVESC_END
+RED_IMPACT_END = RED_IMPACT_START + GLOBAL_MAX_HOSTS
 
 ACTION_TYPE_SLEEP = 0
 ACTION_TYPE_DISCOVER = 1
@@ -52,6 +54,7 @@ ACTION_TYPE_EXPLOIT_SQL = 8
 ACTION_TYPE_EXPLOIT_ETERNALBLUE = 9
 ACTION_TYPE_EXPLOIT_BLUEKEEP = 10
 ACTION_TYPE_PRIVESC = 11
+ACTION_TYPE_IMPACT = 12
 
 _EXPLOIT_RANGES = (
     (RED_EXPLOIT_SSH_START, RED_EXPLOIT_SSH_END, ACTION_TYPE_EXPLOIT_SSH),
@@ -74,6 +77,7 @@ _ENCODE_MAP = {
     "ExploitRemoteService_cc4EternalBlue": RED_EXPLOIT_ETERNALBLUE_START,
     "ExploitRemoteService_cc4BlueKeep": RED_EXPLOIT_BLUEKEEP_START,
     "PrivilegeEscalate": RED_PRIVESC_START,
+    "Impact": RED_IMPACT_START,
 }
 
 
@@ -84,6 +88,8 @@ def encode_red_action(action_name: str, target: int, agent_id: int) -> int:
         return RED_DISCOVER_START + target
     if action_name == "DiscoverNetworkServices":
         return RED_SCAN_START + target
+    if action_name == "Impact":
+        return RED_IMPACT_START + target
     base = _ENCODE_MAP.get(action_name)
     if base is not None:
         return base + target
@@ -106,6 +112,10 @@ def decode_red_action(action_idx: int, agent_id: int, const: CC4Const):
     is_privesc = (action_idx >= RED_PRIVESC_START) & (action_idx < RED_PRIVESC_END)
     action_type = jnp.where(is_privesc, ACTION_TYPE_PRIVESC, action_type)
     target_host = jnp.where(is_privesc, action_idx - RED_PRIVESC_START, target_host)
+
+    is_impact = (action_idx >= RED_IMPACT_START) & (action_idx < RED_IMPACT_END)
+    action_type = jnp.where(is_impact, ACTION_TYPE_IMPACT, action_type)
+    target_host = jnp.where(is_impact, action_idx - RED_IMPACT_START, target_host)
 
     target_subnet = jnp.where(is_discover, action_idx - RED_DISCOVER_START, jnp.int32(-1))
     return action_type, target_subnet, target_host
@@ -194,6 +204,8 @@ SSH_SERVICE_IDX = SERVICE_IDS["SSHD"]
 APACHE_SERVICE_IDX = SERVICE_IDS["APACHE2"]
 MYSQL_SERVICE_IDX = SERVICE_IDS["MYSQLD"]
 SMTP_SERVICE_IDX = SERVICE_IDS["SMTP"]
+
+OTSERVICE_IDX = SERVICE_IDS["OTSERVICE"]
 
 DECOY_HARAKA_IDX = DECOY_IDS["HarakaSMPT"]
 DECOY_APACHE_IDX = DECOY_IDS["Apache"]
@@ -440,6 +452,43 @@ def _apply_privesc(
     )
 
 
+def _apply_impact(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+    target_host: chex.Array,
+) -> CC4State:
+    is_active = const.host_active[target_host]
+    has_session = state.red_sessions[agent_id, target_host]
+    is_privileged = state.red_privilege[agent_id, target_host] >= COMPROMISE_PRIVILEGED
+    has_ot = state.host_services[target_host, OTSERVICE_IDX]
+    success = is_active & has_session & is_privileged & has_ot
+
+    host_services = jnp.where(
+        success,
+        state.host_services.at[target_host, OTSERVICE_IDX].set(False),
+        state.host_services,
+    )
+
+    ot_service_stopped = jnp.where(
+        success,
+        state.ot_service_stopped.at[target_host].set(True),
+        state.ot_service_stopped,
+    )
+
+    activity = jnp.where(
+        success,
+        state.red_activity_this_step.at[target_host].set(ACTIVITY_EXPLOIT),
+        state.red_activity_this_step,
+    )
+
+    return state.replace(
+        host_services=host_services,
+        ot_service_stopped=ot_service_stopped,
+        red_activity_this_step=activity,
+    )
+
+
 _EXPLOIT_DISPATCH = (
     (ACTION_TYPE_EXPLOIT_SSH, _apply_exploit_ssh),
     (ACTION_TYPE_EXPLOIT_FTP, _apply_exploit_ftp),
@@ -485,6 +534,13 @@ def apply_red_action(
     state = jax.lax.cond(
         action_type == ACTION_TYPE_PRIVESC,
         lambda s: _apply_privesc(s, const, agent_id, target_host),
+        lambda s: s,
+        state,
+    )
+
+    state = jax.lax.cond(
+        action_type == ACTION_TYPE_IMPACT,
+        lambda s: _apply_impact(s, const, agent_id, target_host),
         lambda s: s,
         state,
     )
