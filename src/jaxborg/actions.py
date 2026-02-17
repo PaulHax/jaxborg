@@ -6,8 +6,10 @@ from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
     NUM_SUBNETS,
     NUM_SERVICES,
+    NUM_BLUE_AGENTS,
     SERVICE_IDS,
     DECOY_IDS,
+    ACTIVITY_NONE,
     ACTIVITY_SCAN,
     ACTIVITY_EXPLOIT,
     COMPROMISE_NONE,
@@ -548,13 +550,39 @@ def apply_red_action(
     return state
 
 
+BLUE_SLEEP = 0
+BLUE_MONITOR = 1
+
+BLUE_ACTION_TYPE_SLEEP = 0
+BLUE_ACTION_TYPE_MONITOR = 1
+
+
 def encode_blue_action(action_name: str, target_host: int, agent_id: int) -> int:
-    raise NotImplementedError("Subsystem 8+: blue action encoding")
+    if action_name == "Sleep":
+        return BLUE_SLEEP
+    if action_name == "Monitor":
+        return BLUE_MONITOR
+    raise NotImplementedError(f"Unknown blue action {action_name}")
 
 
 def decode_blue_action(action_idx: int, agent_id: int, const: CC4Const):
-    raise NotImplementedError("Subsystem 8+: blue action decoding")
+    action_type = jnp.where(action_idx == BLUE_MONITOR, BLUE_ACTION_TYPE_MONITOR, BLUE_ACTION_TYPE_SLEEP)
+    return action_type
 
 
 def apply_blue_action(state: CC4State, const: CC4Const, agent_id: int, action_idx: int) -> CC4State:
-    raise NotImplementedError("Subsystem 8+: blue action application")
+    return state
+
+
+def apply_blue_monitor(state: CC4State, const: CC4Const) -> CC4State:
+    """End-of-step monitor pass: detect red activity on hosts covered by blue agents.
+
+    Mirrors CybORG's Monitor action which runs automatically at end of each step.
+    Activity is detected on a host if red_activity_this_step != NONE and the host
+    is monitored by at least one blue agent.
+    """
+    any_blue_covers = jnp.any(const.blue_agent_hosts, axis=0)
+    has_activity = state.red_activity_this_step != ACTIVITY_NONE
+    newly_detected = has_activity & any_blue_covers
+    host_activity_detected = state.host_activity_detected | newly_detected
+    return state.replace(host_activity_detected=host_activity_detected)
