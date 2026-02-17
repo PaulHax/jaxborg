@@ -7,6 +7,7 @@ from jaxborg.constants import (
     NUM_SUBNETS,
     NUM_SERVICES,
     SERVICE_IDS,
+    DECOY_IDS,
     ACTIVITY_SCAN,
     ACTIVITY_EXPLOIT,
     COMPROMISE_NONE,
@@ -21,11 +22,54 @@ RED_SCAN_START = RED_DISCOVER_END
 RED_SCAN_END = RED_SCAN_START + GLOBAL_MAX_HOSTS
 RED_EXPLOIT_SSH_START = RED_SCAN_END
 RED_EXPLOIT_SSH_END = RED_EXPLOIT_SSH_START + GLOBAL_MAX_HOSTS
+RED_EXPLOIT_FTP_START = RED_EXPLOIT_SSH_END
+RED_EXPLOIT_FTP_END = RED_EXPLOIT_FTP_START + GLOBAL_MAX_HOSTS
+RED_EXPLOIT_HTTP_START = RED_EXPLOIT_FTP_END
+RED_EXPLOIT_HTTP_END = RED_EXPLOIT_HTTP_START + GLOBAL_MAX_HOSTS
+RED_EXPLOIT_HTTPS_START = RED_EXPLOIT_HTTP_END
+RED_EXPLOIT_HTTPS_END = RED_EXPLOIT_HTTPS_START + GLOBAL_MAX_HOSTS
+RED_EXPLOIT_HARAKA_START = RED_EXPLOIT_HTTPS_END
+RED_EXPLOIT_HARAKA_END = RED_EXPLOIT_HARAKA_START + GLOBAL_MAX_HOSTS
+RED_EXPLOIT_SQL_START = RED_EXPLOIT_HARAKA_END
+RED_EXPLOIT_SQL_END = RED_EXPLOIT_SQL_START + GLOBAL_MAX_HOSTS
+RED_EXPLOIT_ETERNALBLUE_START = RED_EXPLOIT_SQL_END
+RED_EXPLOIT_ETERNALBLUE_END = RED_EXPLOIT_ETERNALBLUE_START + GLOBAL_MAX_HOSTS
+RED_EXPLOIT_BLUEKEEP_START = RED_EXPLOIT_ETERNALBLUE_END
+RED_EXPLOIT_BLUEKEEP_END = RED_EXPLOIT_BLUEKEEP_START + GLOBAL_MAX_HOSTS
 
 ACTION_TYPE_SLEEP = 0
 ACTION_TYPE_DISCOVER = 1
 ACTION_TYPE_SCAN = 2
 ACTION_TYPE_EXPLOIT_SSH = 3
+ACTION_TYPE_EXPLOIT_FTP = 4
+ACTION_TYPE_EXPLOIT_HTTP = 5
+ACTION_TYPE_EXPLOIT_HTTPS = 6
+ACTION_TYPE_EXPLOIT_HARAKA = 7
+ACTION_TYPE_EXPLOIT_SQL = 8
+ACTION_TYPE_EXPLOIT_ETERNALBLUE = 9
+ACTION_TYPE_EXPLOIT_BLUEKEEP = 10
+
+_EXPLOIT_RANGES = (
+    (RED_EXPLOIT_SSH_START, RED_EXPLOIT_SSH_END, ACTION_TYPE_EXPLOIT_SSH),
+    (RED_EXPLOIT_FTP_START, RED_EXPLOIT_FTP_END, ACTION_TYPE_EXPLOIT_FTP),
+    (RED_EXPLOIT_HTTP_START, RED_EXPLOIT_HTTP_END, ACTION_TYPE_EXPLOIT_HTTP),
+    (RED_EXPLOIT_HTTPS_START, RED_EXPLOIT_HTTPS_END, ACTION_TYPE_EXPLOIT_HTTPS),
+    (RED_EXPLOIT_HARAKA_START, RED_EXPLOIT_HARAKA_END, ACTION_TYPE_EXPLOIT_HARAKA),
+    (RED_EXPLOIT_SQL_START, RED_EXPLOIT_SQL_END, ACTION_TYPE_EXPLOIT_SQL),
+    (RED_EXPLOIT_ETERNALBLUE_START, RED_EXPLOIT_ETERNALBLUE_END, ACTION_TYPE_EXPLOIT_ETERNALBLUE),
+    (RED_EXPLOIT_BLUEKEEP_START, RED_EXPLOIT_BLUEKEEP_END, ACTION_TYPE_EXPLOIT_BLUEKEEP),
+)
+
+_ENCODE_MAP = {
+    "ExploitRemoteService_cc4SSHBruteForce": RED_EXPLOIT_SSH_START,
+    "ExploitRemoteService_cc4FTPDirectoryTraversal": RED_EXPLOIT_FTP_START,
+    "ExploitRemoteService_cc4HTTPRFI": RED_EXPLOIT_HTTP_START,
+    "ExploitRemoteService_cc4HTTPSRFI": RED_EXPLOIT_HTTPS_START,
+    "ExploitRemoteService_cc4HarakaRCE": RED_EXPLOIT_HARAKA_START,
+    "ExploitRemoteService_cc4SQLInjection": RED_EXPLOIT_SQL_START,
+    "ExploitRemoteService_cc4EternalBlue": RED_EXPLOIT_ETERNALBLUE_START,
+    "ExploitRemoteService_cc4BlueKeep": RED_EXPLOIT_BLUEKEEP_START,
+}
 
 
 def encode_red_action(action_name: str, target: int, agent_id: int) -> int:
@@ -35,23 +79,26 @@ def encode_red_action(action_name: str, target: int, agent_id: int) -> int:
         return RED_DISCOVER_START + target
     if action_name == "DiscoverNetworkServices":
         return RED_SCAN_START + target
-    if action_name == "ExploitRemoteService_cc4SSHBruteForce":
-        return RED_EXPLOIT_SSH_START + target
-    raise NotImplementedError(f"Subsystem 5+: red action {action_name}")
+    base = _ENCODE_MAP.get(action_name)
+    if base is not None:
+        return base + target
+    raise NotImplementedError(f"Unknown red action {action_name}")
 
 
 def decode_red_action(action_idx: int, agent_id: int, const: CC4Const):
     is_discover = (action_idx >= RED_DISCOVER_START) & (action_idx < RED_DISCOVER_END)
     is_scan = (action_idx >= RED_SCAN_START) & (action_idx < RED_SCAN_END)
-    is_exploit_ssh = (action_idx >= RED_EXPLOIT_SSH_START) & (action_idx < RED_EXPLOIT_SSH_END)
-    action_type = jnp.where(
-        is_discover, ACTION_TYPE_DISCOVER,
-        jnp.where(is_scan, ACTION_TYPE_SCAN,
-        jnp.where(is_exploit_ssh, ACTION_TYPE_EXPLOIT_SSH, ACTION_TYPE_SLEEP)))
-    target_subnet = jnp.where(is_discover, action_idx - RED_DISCOVER_START, -1)
-    target_host = jnp.where(
-        is_scan, action_idx - RED_SCAN_START,
-        jnp.where(is_exploit_ssh, action_idx - RED_EXPLOIT_SSH_START, -1))
+
+    action_type = jnp.where(is_discover, ACTION_TYPE_DISCOVER,
+                  jnp.where(is_scan, ACTION_TYPE_SCAN, ACTION_TYPE_SLEEP))
+    target_host = jnp.where(is_scan, action_idx - RED_SCAN_START, jnp.int32(-1))
+
+    for start, end, atype in _EXPLOIT_RANGES:
+        in_range = (action_idx >= start) & (action_idx < end)
+        action_type = jnp.where(in_range, atype, action_type)
+        target_host = jnp.where(in_range, action_idx - start, target_host)
+
+    target_subnet = jnp.where(is_discover, action_idx - RED_DISCOVER_START, jnp.int32(-1))
     return action_type, target_subnet, target_host
 
 
@@ -135,25 +182,36 @@ def _apply_scan(
 
 
 SSH_SERVICE_IDX = SERVICE_IDS["SSHD"]
+APACHE_SERVICE_IDX = SERVICE_IDS["APACHE2"]
+MYSQL_SERVICE_IDX = SERVICE_IDS["MYSQLD"]
+SMTP_SERVICE_IDX = SERVICE_IDS["SMTP"]
+
+DECOY_HARAKA_IDX = DECOY_IDS["HarakaSMPT"]
+DECOY_APACHE_IDX = DECOY_IDS["Apache"]
+DECOY_TOMCAT_IDX = DECOY_IDS["Tomcat"]
+DECOY_VSFTPD_IDX = DECOY_IDS["Vsftpd"]
 
 
-def _apply_exploit_ssh(
+def _exploit_common_preconditions(
     state: CC4State,
     const: CC4Const,
     agent_id: int,
     target_host: chex.Array,
-) -> CC4State:
+) -> chex.Array:
     is_active = const.host_active[target_host]
     is_scanned = state.red_scanned_hosts[agent_id, target_host]
-    has_ssh = state.host_services[target_host, SSH_SERVICE_IDX]
-    has_bruteforceable = const.host_has_bruteforceable_user[target_host]
     target_subnet = const.host_subnet[target_host]
     can_reach = _can_reach_subnet(state, const, agent_id, target_subnet)
-    already_has_session = state.red_sessions[agent_id, target_host]
+    no_session = ~state.red_sessions[agent_id, target_host]
+    return is_active & is_scanned & can_reach & no_session
 
-    success = (is_active & is_scanned & has_ssh & has_bruteforceable
-               & can_reach & ~already_has_session)
 
+def _apply_exploit_success(
+    state: CC4State,
+    agent_id: int,
+    target_host: chex.Array,
+    success: chex.Array,
+) -> CC4State:
     red_sessions = jnp.where(
         success,
         state.red_sessions.at[agent_id, target_host].set(True),
@@ -200,6 +258,152 @@ def _apply_exploit_ssh(
     )
 
 
+def _apply_exploit_ssh(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+    target_host: chex.Array,
+) -> CC4State:
+    base_ok = _exploit_common_preconditions(state, const, agent_id, target_host)
+    has_ssh = state.host_services[target_host, SSH_SERVICE_IDX]
+    has_bruteforceable = const.host_has_bruteforceable_user[target_host]
+    success = base_ok & has_ssh & has_bruteforceable
+    return _apply_exploit_success(state, agent_id, target_host, success)
+
+
+def _apply_exploit_ftp(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+    target_host: chex.Array,
+) -> CC4State:
+    """FTPDirectoryTraversal: port 21, femitter process. No FTP service in CC4 → always fails.
+    Decoy Vsftpd creates a fake service that traps this exploit."""
+    base_ok = _exploit_common_preconditions(state, const, agent_id, target_host)
+    has_decoy = state.host_decoys[target_host, DECOY_VSFTPD_IDX]
+    # FTP service doesn't exist in the CC4 service model, so only decoy can trigger.
+    # Decoy blocks the exploit (always fails), but still creates detection activity.
+    detected = base_ok & has_decoy
+    activity = jnp.where(
+        detected,
+        state.red_activity_this_step.at[target_host].set(ACTIVITY_EXPLOIT),
+        state.red_activity_this_step,
+    )
+    return state.replace(red_activity_this_step=activity)
+
+
+def _apply_exploit_http(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+    target_host: chex.Array,
+) -> CC4State:
+    """HTTPRFI: port 80, Apache2/WEBSERVER process. Needs 'rfi' property."""
+    base_ok = _exploit_common_preconditions(state, const, agent_id, target_host)
+    has_apache = state.host_services[target_host, APACHE_SERVICE_IDX]
+    has_rfi = const.host_has_rfi[target_host]
+    has_decoy = state.host_decoys[target_host, DECOY_APACHE_IDX]
+    detected = base_ok & has_apache & has_decoy
+    success = base_ok & has_apache & has_rfi & ~has_decoy
+    activity = jnp.where(
+        detected,
+        state.red_activity_this_step.at[target_host].set(ACTIVITY_EXPLOIT),
+        state.red_activity_this_step,
+    )
+    state = state.replace(red_activity_this_step=activity)
+    return _apply_exploit_success(state, agent_id, target_host, success)
+
+
+def _apply_exploit_https(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+    target_host: chex.Array,
+) -> CC4State:
+    """HTTPSRFI: port 443, webserver process. Needs 'rfi' property.
+    No port-443 service in CC4 → only Tomcat decoy can trigger (and block)."""
+    base_ok = _exploit_common_preconditions(state, const, agent_id, target_host)
+    has_decoy = state.host_decoys[target_host, DECOY_TOMCAT_IDX]
+    detected = base_ok & has_decoy
+    activity = jnp.where(
+        detected,
+        state.red_activity_this_step.at[target_host].set(ACTIVITY_EXPLOIT),
+        state.red_activity_this_step,
+    )
+    return state.replace(red_activity_this_step=activity)
+
+
+def _apply_exploit_haraka(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+    target_host: chex.Array,
+) -> CC4State:
+    """HarakaRCE: port 25, SMTP process. Needs Haraka version < 2.8.9.
+    In CC4, SMTP always starts at version 2.8.9 → real service never vulnerable.
+    Decoy HarakaSMPT creates a fake vulnerable SMTP that traps and blocks."""
+    base_ok = _exploit_common_preconditions(state, const, agent_id, target_host)
+    has_smtp = state.host_services[target_host, SMTP_SERVICE_IDX]
+    has_decoy = state.host_decoys[target_host, DECOY_HARAKA_IDX]
+    detected = base_ok & has_smtp & has_decoy
+    # Real SMTP is never vulnerable (version == 2.8.9), decoy blocks. Always fails.
+    activity = jnp.where(
+        detected,
+        state.red_activity_this_step.at[target_host].set(ACTIVITY_EXPLOIT),
+        state.red_activity_this_step,
+    )
+    return state.replace(red_activity_this_step=activity)
+
+
+def _apply_exploit_sql(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+    target_host: chex.Array,
+) -> CC4State:
+    """SQLInjection: port 3390, MySQL process. Also requires port 80 or 443 (web frontend).
+    test_exploit_works always returns True. No decoy blocks SQL specifically."""
+    base_ok = _exploit_common_preconditions(state, const, agent_id, target_host)
+    has_mysql = state.host_services[target_host, MYSQL_SERVICE_IDX]
+    has_web = state.host_services[target_host, APACHE_SERVICE_IDX]
+    success = base_ok & has_mysql & has_web
+    return _apply_exploit_success(state, agent_id, target_host, success)
+
+
+def _apply_exploit_eternalblue(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+    target_host: chex.Array,
+) -> CC4State:
+    """EternalBlue: port 139, SMB. Needs Windows + unpatched.
+    CC4 is all Linux with no SMB service → always fails."""
+    return state
+
+
+def _apply_exploit_bluekeep(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+    target_host: chex.Array,
+) -> CC4State:
+    """BlueKeep: port 3389, RDP. Needs Windows + unpatched.
+    CC4 is all Linux with no RDP service → always fails."""
+    return state
+
+
+_EXPLOIT_DISPATCH = (
+    (ACTION_TYPE_EXPLOIT_SSH, _apply_exploit_ssh),
+    (ACTION_TYPE_EXPLOIT_FTP, _apply_exploit_ftp),
+    (ACTION_TYPE_EXPLOIT_HTTP, _apply_exploit_http),
+    (ACTION_TYPE_EXPLOIT_HTTPS, _apply_exploit_https),
+    (ACTION_TYPE_EXPLOIT_HARAKA, _apply_exploit_haraka),
+    (ACTION_TYPE_EXPLOIT_SQL, _apply_exploit_sql),
+    (ACTION_TYPE_EXPLOIT_ETERNALBLUE, _apply_exploit_eternalblue),
+    (ACTION_TYPE_EXPLOIT_BLUEKEEP, _apply_exploit_bluekeep),
+)
+
+
 def apply_red_action(
     state: CC4State,
     const: CC4Const,
@@ -222,12 +426,13 @@ def apply_red_action(
         state,
     )
 
-    state = jax.lax.cond(
-        action_type == ACTION_TYPE_EXPLOIT_SSH,
-        lambda s: _apply_exploit_ssh(s, const, agent_id, target_host),
-        lambda s: s,
-        state,
-    )
+    for atype, apply_fn in _EXPLOIT_DISPATCH:
+        state = jax.lax.cond(
+            action_type == atype,
+            lambda s, fn=apply_fn: fn(s, const, agent_id, target_host),
+            lambda s: s,
+            state,
+        )
 
     return state
 
