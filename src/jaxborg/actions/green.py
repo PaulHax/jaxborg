@@ -66,6 +66,13 @@ def _apply_single_green(
     work_succeeds = has_service & (rel_roll < svc_reliability)
 
     # -- GreenLocalWork --
+    local_work_failed = (action == GREEN_LOCAL_WORK) & has_service & ~work_succeeds
+    green_lwf_this_step = jnp.where(
+        local_work_failed,
+        state.green_lwf_this_step.at[host_idx].set(True),
+        state.green_lwf_this_step,
+    )
+
     fp_roll = jax.random.uniform(k2)
     fp_triggered = fp_roll < FP_DETECTION_RATE
     local_fp = (action == GREEN_LOCAL_WORK) & work_succeeds & fp_triggered
@@ -130,6 +137,12 @@ def _apply_single_green(
     access_fp_roll = jax.random.uniform(k5)
     access_fp = do_access & ~is_blocked & (access_fp_roll < FP_DETECTION_RATE)
 
+    green_asf_this_step = jnp.where(
+        access_blocked,
+        state.green_asf_this_step.at[dest_host].set(True),
+        state.green_asf_this_step,
+    )
+
     host_activity_detected = state.host_activity_detected
     host_activity_detected = jnp.where(
         access_blocked | access_fp,
@@ -148,6 +161,8 @@ def _apply_single_green(
         red_privilege=red_privilege,
         host_compromised=host_compromised,
         host_activity_detected=host_activity_detected,
+        green_lwf_this_step=green_lwf_this_step,
+        green_asf_this_step=green_asf_this_step,
     )
 
 

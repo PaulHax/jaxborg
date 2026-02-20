@@ -8,6 +8,7 @@ from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.encoding import BLUE_SLEEP, RED_SLEEP
+from jaxborg.agents.fsm_red import fsm_red_init_states
 from jaxborg.constants import NUM_BLUE_AGENTS, NUM_RED_AGENTS
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
@@ -99,6 +100,9 @@ class CC4DifferentialHarness:
 
         start_sessions = jnp.zeros_like(self.jax_state.red_sessions)
         start_priv = jnp.zeros_like(self.jax_state.red_privilege)
+        start_discovered = jnp.zeros_like(self.jax_state.red_discovered_hosts)
+        host_compromised = self.jax_state.host_compromised
+        fsm_states = self.jax_state.fsm_host_states
         cyborg_state = self.cyborg_env.environment_controller.state
         for agent_name, sessions in cyborg_state.sessions.items():
             if not agent_name.startswith("red_agent_"):
@@ -110,13 +114,20 @@ class CC4DifferentialHarness:
                 if sess.hostname in self.mappings.hostname_to_idx:
                     hidx = self.mappings.hostname_to_idx[sess.hostname]
                     start_sessions = start_sessions.at[red_idx, hidx].set(True)
+                    start_discovered = start_discovered.at[red_idx, hidx].set(True)
                     level = 1
                     if hasattr(sess, "username") and sess.username in ("root", "SYSTEM"):
                         level = 2
                     start_priv = start_priv.at[red_idx, hidx].set(jnp.maximum(start_priv[red_idx, hidx], level))
+                    host_compromised = host_compromised.at[hidx].set(jnp.maximum(host_compromised[hidx], level))
+            if self.jax_const.red_agent_active[red_idx]:
+                fsm_states = fsm_states.at[red_idx].set(fsm_red_init_states(self.jax_const, red_idx))
         self.jax_state = self.jax_state.replace(
             red_sessions=start_sessions,
             red_privilege=start_priv,
+            red_discovered_hosts=start_discovered,
+            host_compromised=host_compromised,
+            fsm_host_states=fsm_states,
         )
 
         self.rng_key = jax.random.PRNGKey(self.seed)

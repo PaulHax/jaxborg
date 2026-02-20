@@ -79,6 +79,9 @@ class CC4State:
 
     fsm_host_states: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int — FSM state per red agent per host
 
+    green_lwf_this_step: chex.Array  # (GLOBAL_MAX_HOSTS,) bool — green LocalWork failed this step
+    green_asf_this_step: chex.Array  # (GLOBAL_MAX_HOSTS,) bool — green AccessService failed this step
+
     detection_randoms: chex.Array  # (MAX_DETECTION_RANDOMS,) float — precomputed sequence
     detection_random_index: chex.Array  # scalar int — next index to consume
     use_detection_randoms: chex.Array  # scalar bool — True = use sequence, False = use JAX RNG
@@ -135,6 +138,8 @@ def create_initial_state() -> CC4State:
         blocked_zones=jnp.zeros((NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_),
         messages=jnp.zeros((NUM_BLUE_AGENTS, NUM_BLUE_AGENTS, MESSAGE_LENGTH), dtype=jnp.float32),
         fsm_host_states=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
+        green_lwf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
+        green_asf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         detection_randoms=jnp.zeros(MAX_DETECTION_RANDOMS, dtype=jnp.float32),
         detection_random_index=jnp.array(0, dtype=jnp.int32),
         use_detection_randoms=jnp.array(False),
