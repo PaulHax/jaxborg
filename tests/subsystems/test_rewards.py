@@ -236,3 +236,26 @@ class TestComputeRewards:
         jitted = jax.jit(compute_rewards)
         reward = jitted(state, jax_const, no_events, no_events, no_events)
         assert float(reward) == 0.0
+
+
+@cyborg_required
+class TestRewardsDifferential:
+    @pytest.fixture
+    def cyborg_env(self):
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        return CybORG(scenario_generator=sg, seed=42)
+
+    def test_zero_reward_on_sleep_matches(self, cyborg_env):
+        """Both envs should give 0 reward when all agents sleep."""
+        from jaxborg.topology import build_const_from_cyborg
+
+        const = build_const_from_cyborg(cyborg_env)
+        state = create_initial_state()
+        no_events = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
+        jax_reward = float(compute_rewards(state, const, no_events, no_events, no_events))
+        assert jax_reward == 0.0

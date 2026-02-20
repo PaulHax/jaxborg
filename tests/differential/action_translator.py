@@ -1,6 +1,4 @@
-def translate_blue_action(cyborg_action, agent_name: str, topology) -> int:
-    raise NotImplementedError("Subsystem 8+: blue action translation")
+from jaxborg.translate import cyborg_blue_to_jax as translate_blue_action
+from jaxborg.translate import cyborg_red_to_jax as translate_red_action
 
-
-def translate_red_action(cyborg_action, agent_name: str, topology) -> int:
-    raise NotImplementedError("Subsystem 2+: red action translation")
+__all__ = ["translate_red_action", "translate_blue_action"]

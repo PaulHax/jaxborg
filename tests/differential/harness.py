@@ -1,5 +1,22 @@
 from dataclasses import dataclass, field
 
+import jax
+import jax.numpy as jnp
+from CybORG import CybORG
+from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
+from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
+from jaxborg.actions import apply_blue_action, apply_red_action
+from jaxborg.actions.encoding import BLUE_SLEEP, RED_SLEEP
+from jaxborg.constants import NUM_BLUE_AGENTS, NUM_RED_AGENTS
+from jaxborg.state import create_initial_state
+from jaxborg.topology import build_const_from_cyborg
+from jaxborg.translate import (
+    build_mappings_from_cyborg,
+    jax_blue_to_cyborg,
+    jax_red_to_cyborg,
+)
+
 
 @dataclass
 class StateSnapshot:
@@ -39,23 +56,200 @@ class TestResult:
 
 
 class CC4DifferentialHarness:
-    def __init__(self, seed=42, max_steps=500, check_rewards=True, check_obs=False):
+    def __init__(
+        self,
+        seed=42,
+        max_steps=500,
+        blue_cls=SleepAgent,
+        green_cls=EnterpriseGreenAgent,
+        red_cls=FiniteStateRedAgent,
+        check_rewards=True,
+        check_obs=False,
+    ):
         self.seed = seed
         self.max_steps = max_steps
+        self.blue_cls = blue_cls
+        self.green_cls = green_cls
+        self.red_cls = red_cls
         self.check_rewards = check_rewards
         self.check_obs = check_obs
+        self.cyborg_env = None
+        self.jax_state = None
+        self.jax_const = None
+        self.mappings = None
+        self.rng_key = None
 
     def reset(self):
-        raise NotImplementedError("Subsystem 1: topology comparison")
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=self.blue_cls,
+            green_agent_class=self.green_cls,
+            red_agent_class=self.red_cls,
+            steps=self.max_steps,
+        )
+        self.cyborg_env = CybORG(scenario_generator=sg, seed=self.seed)
+        self.cyborg_env.reset()
 
-    def step(self, blue_actions: dict[str, int]) -> StepResult:
-        raise NotImplementedError("Subsystem 1+: step comparison")
+        self.jax_const = build_const_from_cyborg(self.cyborg_env)
+        self.mappings = build_mappings_from_cyborg(self.cyborg_env)
 
-    def run_episode(self, blue_policies, red_policy=None, max_steps=None) -> TestResult:
-        raise NotImplementedError("Subsystem 1+: full episode comparison")
+        self.jax_state = create_initial_state()
+        self.jax_state = self.jax_state.replace(
+            host_services=jnp.array(self.jax_const.initial_services),
+        )
+
+        start_sessions = jnp.zeros_like(self.jax_state.red_sessions)
+        start_priv = jnp.zeros_like(self.jax_state.red_privilege)
+        cyborg_state = self.cyborg_env.environment_controller.state
+        for agent_name, sessions in cyborg_state.sessions.items():
+            if not agent_name.startswith("red_agent_"):
+                continue
+            red_idx = int(agent_name.split("_")[-1])
+            if red_idx >= NUM_RED_AGENTS:
+                continue
+            for sess in sessions.values():
+                if sess.hostname in self.mappings.hostname_to_idx:
+                    hidx = self.mappings.hostname_to_idx[sess.hostname]
+                    start_sessions = start_sessions.at[red_idx, hidx].set(True)
+                    level = 1
+                    if hasattr(sess, "username") and sess.username in ("root", "SYSTEM"):
+                        level = 2
+                    start_priv = start_priv.at[red_idx, hidx].set(jnp.maximum(start_priv[red_idx, hidx], level))
+        self.jax_state = self.jax_state.replace(
+            red_sessions=start_sessions,
+            red_privilege=start_priv,
+        )
+
+        self.rng_key = jax.random.PRNGKey(self.seed)
+
+        from tests.differential.state_comparator import (
+            extract_cyborg_snapshot,
+            extract_jax_snapshot,
+        )
+
+        return (
+            extract_cyborg_snapshot(self.cyborg_env, self.mappings),
+            extract_jax_snapshot(self.jax_state, self.jax_const, self.mappings),
+        )
+
+    def step_red_only(self, agent_id: int, action_idx: int) -> StepResult:
+        self.rng_key, subkey = jax.random.split(self.rng_key)
+
+        cyborg_action = jax_red_to_cyborg(action_idx, agent_id, self.mappings)
+        agent_name = f"red_agent_{agent_id}"
+        self.cyborg_env.step(agent=agent_name, action=cyborg_action)
+
+        self.jax_state = apply_red_action(self.jax_state, self.jax_const, agent_id, action_idx, subkey)
+
+        from tests.differential.state_comparator import (
+            compare_snapshots,
+            extract_cyborg_snapshot,
+            extract_jax_snapshot,
+        )
+
+        cyborg_snap = extract_cyborg_snapshot(self.cyborg_env, self.mappings)
+        jax_snap = extract_jax_snapshot(self.jax_state, self.jax_const, self.mappings)
+        diffs = compare_snapshots(cyborg_snap, jax_snap)
+
+        return StepResult(step=int(self.jax_state.time), diffs=diffs)
+
+    def step_blue_only(self, agent_id: int, action_idx: int) -> StepResult:
+        cyborg_action = jax_blue_to_cyborg(action_idx, agent_id, self.mappings)
+        agent_name = f"blue_agent_{agent_id}"
+        self.cyborg_env.step(agent=agent_name, action=cyborg_action)
+
+        self.jax_state = apply_blue_action(self.jax_state, self.jax_const, agent_id, action_idx)
+
+        from tests.differential.state_comparator import (
+            compare_snapshots,
+            extract_cyborg_snapshot,
+            extract_jax_snapshot,
+        )
+
+        cyborg_snap = extract_cyborg_snapshot(self.cyborg_env, self.mappings)
+        jax_snap = extract_jax_snapshot(self.jax_state, self.jax_const, self.mappings)
+        diffs = compare_snapshots(cyborg_snap, jax_snap)
+
+        return StepResult(step=int(self.jax_state.time), diffs=diffs)
+
+    def step(self, actions: dict) -> StepResult:
+        self.rng_key, *subkeys = jax.random.split(self.rng_key, NUM_RED_AGENTS + 1)
+
+        for agent_name, action_idx in actions.items():
+            if agent_name.startswith("red_agent_"):
+                cyborg_action = jax_red_to_cyborg(action_idx, _agent_idx(agent_name), self.mappings)
+            else:
+                cyborg_action = jax_blue_to_cyborg(action_idx, _agent_idx(agent_name), self.mappings)
+            self.cyborg_env.step(agent=agent_name, action=cyborg_action)
+
+        for agent_name, action_idx in actions.items():
+            if agent_name.startswith("red_agent_"):
+                aid = _agent_idx(agent_name)
+                self.jax_state = apply_red_action(self.jax_state, self.jax_const, aid, action_idx, subkeys[aid])
+            else:
+                aid = _agent_idx(agent_name)
+                self.jax_state = apply_blue_action(self.jax_state, self.jax_const, aid, action_idx)
+
+        from tests.differential.state_comparator import (
+            compare_snapshots,
+            extract_cyborg_snapshot,
+            extract_jax_snapshot,
+        )
+
+        cyborg_snap = extract_cyborg_snapshot(self.cyborg_env, self.mappings)
+        jax_snap = extract_jax_snapshot(self.jax_state, self.jax_const, self.mappings)
+        diffs = compare_snapshots(cyborg_snap, jax_snap)
+
+        return StepResult(step=int(self.jax_state.time), diffs=diffs)
+
+    def run_episode(self, blue_policies=None, red_policy=None, max_steps=None) -> TestResult:
+        max_steps = max_steps or self.max_steps
+        self.reset()
+
+        step_results = []
+        error_count = 0
+
+        for t in range(max_steps):
+            actions = {}
+
+            if red_policy:
+                for r in range(NUM_RED_AGENTS):
+                    actions[f"red_agent_{r}"] = red_policy(self.jax_state, self.jax_const, r)
+            else:
+                for r in range(NUM_RED_AGENTS):
+                    actions[f"red_agent_{r}"] = RED_SLEEP
+
+            if blue_policies:
+                for b in range(NUM_BLUE_AGENTS):
+                    actions[f"blue_agent_{b}"] = blue_policies(self.jax_state, self.jax_const, b)
+            else:
+                for b in range(NUM_BLUE_AGENTS):
+                    actions[f"blue_agent_{b}"] = BLUE_SLEEP
+
+            result = self.step(actions)
+            step_results.append(result)
+
+            from tests.differential.state_comparator import _ERROR_FIELDS
+
+            error_count += sum(1 for d in result.diffs if d.field_name in _ERROR_FIELDS)
+
+            self.jax_state = self.jax_state.replace(time=t + 1)
+
+        return TestResult(
+            steps_run=max_steps,
+            step_results=step_results,
+            error_diffs=error_count,
+        )
 
     def get_cyborg_snapshot(self) -> StateSnapshot:
-        raise NotImplementedError("Subsystem 1: state extraction")
+        from tests.differential.state_comparator import extract_cyborg_snapshot
+
+        return extract_cyborg_snapshot(self.cyborg_env, self.mappings)
 
     def get_jax_snapshot(self) -> StateSnapshot:
-        raise NotImplementedError("Subsystem 1: state extraction")
+        from tests.differential.state_comparator import extract_jax_snapshot
+
+        return extract_jax_snapshot(self.jax_state, self.jax_const, self.mappings)
+
+
+def _agent_idx(agent_name: str) -> int:
+    return int(agent_name.split("_")[-1])

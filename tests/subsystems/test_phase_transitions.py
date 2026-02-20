@@ -131,3 +131,31 @@ class TestPhaseTransitionsMatchCybORG:
             jax_phase = int(state.mission_phase)
             cyborg_phase = cyborg_phase_at_step[t]
             assert jax_phase == cyborg_phase, f"step={t}: JAX phase={jax_phase} CybORG phase={cyborg_phase}"
+
+
+@cyborg_required
+class TestPhaseDifferential:
+    @pytest.fixture
+    def cyborg_env(self):
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        return CybORG(scenario_generator=sg, seed=42)
+
+    def test_phase_boundaries_via_harness(self, cyborg_env):
+        """Use the differential harness to compare phase at each boundary step."""
+        from jaxborg.topology import build_const_from_cyborg
+
+        const = build_const_from_cyborg(cyborg_env)
+        boundaries = np.array(const.phase_boundaries)
+
+        for phase_idx in range(MISSION_PHASES):
+            step = int(boundaries[phase_idx])
+            state = create_initial_state().replace(time=step)
+            state = advance_mission_phase(state, const)
+            assert int(state.mission_phase) == phase_idx, (
+                f"At step {step}, expected phase {phase_idx}, got {int(state.mission_phase)}"
+            )

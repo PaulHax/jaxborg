@@ -251,3 +251,71 @@ class TestFsmSessionRemoval:
 
         new_fsm = fsm_red_process_session_removal(state, 0)
         assert int(new_fsm[0, 5]) == FSM_S
+
+
+try:
+    from CybORG import CybORG
+    from CybORG.Agents import FiniteStateRedAgent, SleepAgent
+    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
+    HAS_CYBORG = True
+except ImportError:
+    HAS_CYBORG = False
+
+cyborg_required = pytest.mark.skipif(not HAS_CYBORG, reason="CybORG not installed")
+
+
+@cyborg_required
+class TestFsmRedDifferential:
+    @pytest.fixture
+    def cyborg_env(self):
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=FiniteStateRedAgent,
+            steps=500,
+        )
+        return CybORG(scenario_generator=sg, seed=42)
+
+    def test_translate_roundtrip_discover(self, cyborg_env):
+        """Verify DiscoverRemoteSystems roundtrips through the translator."""
+        from CybORG.Simulator.Actions import DiscoverRemoteSystems
+
+        from jaxborg.actions.encoding import RED_DISCOVER_START
+        from jaxborg.translate import (
+            build_mappings_from_cyborg,
+            cyborg_red_to_jax,
+            jax_red_to_cyborg,
+        )
+
+        mappings = build_mappings_from_cyborg(cyborg_env)
+        subnet_idx = list(mappings.subnet_cidrs.keys())[0]
+        cidr = mappings.subnet_cidrs[subnet_idx]
+
+        action = DiscoverRemoteSystems(subnet=cidr, session=0, agent="red_agent_0")
+        jax_idx = cyborg_red_to_jax(action, "red_agent_0", mappings)
+        assert jax_idx == RED_DISCOVER_START + subnet_idx
+
+        roundtrip = jax_red_to_cyborg(jax_idx, 0, mappings)
+        assert type(roundtrip).__name__ == "DiscoverRemoteSystems"
+        assert roundtrip.subnet == cidr
+
+    def test_translate_roundtrip_exploit(self, cyborg_env):
+        """Verify exploit action roundtrips through the translator."""
+        from CybORG.Simulator.Actions import SSHBruteForce
+
+        from jaxborg.actions.encoding import RED_EXPLOIT_SSH_START
+        from jaxborg.translate import build_mappings_from_cyborg, cyborg_red_to_jax, jax_red_to_cyborg
+
+        mappings = build_mappings_from_cyborg(cyborg_env)
+        host_idx = 0
+        hostname = mappings.idx_to_hostname[host_idx]
+        ip = mappings.hostname_to_ip[hostname]
+
+        action = SSHBruteForce(session=0, agent="red_agent_0", ip_address=ip)
+        jax_idx = cyborg_red_to_jax(action, "red_agent_0", mappings)
+        assert jax_idx == RED_EXPLOIT_SSH_START + host_idx
+
+        roundtrip = jax_red_to_cyborg(jax_idx, 0, mappings)
+        assert type(roundtrip).__name__ == "SSHBruteForce"
+        assert roundtrip.ip_address == ip

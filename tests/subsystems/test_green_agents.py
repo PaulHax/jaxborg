@@ -208,3 +208,37 @@ class TestDifferentialGreen:
 
     def test_fp_rate_matches_cyborg(self):
         assert FP_DETECTION_RATE == 0.01
+
+
+@cyborg_required
+class TestGreenStatisticalDifferential:
+    @pytest.fixture
+    def cyborg_env(self):
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=EnterpriseGreenAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        return CybORG(scenario_generator=sg, seed=42)
+
+    def test_fp_rate_within_statistical_bounds(self, cyborg_env):
+        """Run many steps with only green active, check FP rate is statistically consistent."""
+        from jaxborg.topology import build_const_from_cyborg
+
+        const = build_const_from_cyborg(cyborg_env)
+        state = create_initial_state()
+        state = state.replace(host_services=const.initial_services)
+
+        jitted = jax.jit(apply_green_agents)
+        fp_total = 0
+        n_green = int(jnp.sum(const.green_agent_active))
+        n_trials = 200
+
+        for i in range(n_trials):
+            key = jax.random.PRNGKey(i)
+            new_state = jitted(state, const, key)
+            fp_total += int(jnp.sum(new_state.host_activity_detected & const.green_agent_active))
+
+        observed_rate = fp_total / (n_green * n_trials) if n_green > 0 else 0
+        assert observed_rate < 0.05, f"FP rate {observed_rate} seems too high"

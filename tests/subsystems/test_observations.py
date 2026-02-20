@@ -400,3 +400,37 @@ class TestDifferentialWithCybORG:
                     jax_obs,
                     err_msg=f"seed={seed} {agent_name}: initial obs mismatch",
                 )
+
+
+@cyborg_required
+class TestBlueObsDifferential:
+    @pytest.fixture
+    def cyborg_env(self):
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        return CybORG(scenario_generator=sg, seed=42)
+
+    def test_obs_structure_matches_across_seeds(self):
+        """Verify obs structure matches CybORG for multiple seeds."""
+        for seed in [42, 100, 200]:
+            sg = EnterpriseScenarioGenerator(
+                blue_agent_class=SleepAgent,
+                green_agent_class=SleepAgent,
+                red_agent_class=SleepAgent,
+                steps=500,
+            )
+            env = CybORG(scenario_generator=sg, seed=seed)
+            wrapped = BlueFlatWrapper(env, pad_spaces=True)
+            observations, _ = wrapped.reset()
+            const = build_const_from_cyborg(env)
+            state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+
+            for agent_id in range(NUM_BLUE_AGENTS):
+                agent_name = f"blue_agent_{agent_id}"
+                cyborg_obs = observations[agent_name]
+                jax_obs = np.array(get_blue_obs(state, const, agent_id))
+                assert cyborg_obs.shape == jax_obs.shape, f"seed={seed} {agent_name}: shape mismatch"

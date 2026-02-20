@@ -356,3 +356,31 @@ class TestDifferentialMessages:
                 jax_body,
                 err_msg=f"{agent_name}: non-message obs mismatch after step",
             )
+
+
+@cyborg_required
+class TestMessageDifferential:
+    @pytest.fixture
+    def cyborg_env(self):
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        return CybORG(scenario_generator=sg, seed=42)
+
+    def test_message_section_position_matches(self, cyborg_env):
+        """Verify message section is in same position in both implementations."""
+        wrapped = BlueFlatWrapper(cyborg_env, pad_spaces=True)
+        const = build_const_from_cyborg(cyborg_env)
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        observations, _ = wrapped.reset()
+
+        for agent_id in range(NUM_BLUE_AGENTS):
+            agent_name = f"blue_agent_{agent_id}"
+            cyborg_obs = observations[agent_name]
+            jax_obs = np.array(get_blue_obs(state, const, agent_id))
+            cyborg_msgs = cyborg_obs[-MESSAGE_SECTION_SIZE:]
+            jax_msgs = jax_obs[-MESSAGE_SECTION_SIZE:]
+            np.testing.assert_array_equal(cyborg_msgs, jax_msgs, err_msg=f"{agent_name}: message section mismatch")
