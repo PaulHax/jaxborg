@@ -7,11 +7,13 @@ requires-python = ">=3.11"
 dependencies = [
     "chex",
     "cyborg",
+    "distrax",
     "flax",
     "hydra-core>=1.3.2",
     "jax",
     "jaxmarl",
     "omegaconf>=2.3.0",
+    "optax",
 ]
 
 [build-system]
@@ -29,6 +31,11 @@ jaxmarl = { git = "https://github.com/FLAIROx/JaxMARL.git", branch = "main" }
 dev = [
     "pytest-xdist>=3.8.0",
     "ruff",
+]
+sb3 = [
+    "sb3-contrib>=2.0",
+    "pettingzoo>=1.24.0",
+    "torch>=2.0",
 ]
 
 [tool.pytest.ini_options]

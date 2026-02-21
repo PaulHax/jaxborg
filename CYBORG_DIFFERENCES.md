@@ -99,3 +99,30 @@ observation vectors are not directly comparable between CybORG and JAX for agent
 
 - JAX: `observations.py` — always 3 blocks + messages
 - CybORG: `BlueFlatWrapper.observation_change()` — variable blocks + messages + padding
+
+## CC4Env: Red Agents Exposed as Controllable (CybORG: Scripted FSM)
+
+CybORG CC4 is a **blue-only training** environment. Red agents always run the
+`FiniteStateRedAgent` FSM internally — they are not controllable by an RL policy. The FSM
+reads directly from state (`fsm_host_states`, `red_discovered_hosts`, `host_active`),
+picks a random eligible host, samples an action from a hardcoded probability matrix, and
+does not use observations at all.
+
+The JAX `CC4Env` currently exposes red agents as controllable agents in the action dict
+(6 red agents alongside 5 blue agents, 11 total). This was a design choice to support
+potential future red-blue self-play, but diverges from CC4's intended use where only blue
+agents are trained.
+
+For standard CC4 training, red actions should be generated internally by `fsm_red_get_action()`
+during `step_env()`, and only the 5 blue agents should appear in the action/observation/reward
+dicts.
+
+To make red agents genuinely trainable for self-play, additional work is needed:
+- **Red observations**: `get_red_obs()` currently returns zeros — needs proper encoding of
+  discovered hosts, session states, privilege levels, and FSM progress
+- **Red action masking**: `get_avail_actions()` returns all-ones for red — needs masks to
+  prevent invalid actions (e.g., scanning undiscovered hosts, exploiting without sessions)
+- **Red obs space**: currently set to `BLUE_OBS_SIZE` as a placeholder
+
+- JAX: `env.py` — red agents in `self.agents`, receive actions from caller
+- CybORG: `EnterpriseScenarioGenerator` — red always `FiniteStateRedAgent`, not trainable
