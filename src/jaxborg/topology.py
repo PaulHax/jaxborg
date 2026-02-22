@@ -447,7 +447,6 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
         ]
         if non_router_hosts:
             red_start_hosts[i] = rng.choice(non_router_hosts)
-        if snames == ["CONTRACTOR_NETWORK"]:
             red_agent_active[i] = True
 
     green_agent_host = np.full(GLOBAL_MAX_HOSTS, -1, dtype=np.int32)

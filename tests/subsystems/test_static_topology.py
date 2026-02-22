@@ -203,11 +203,10 @@ class TestPureToplogy:
         start = int(c.red_start_hosts[0])
         assert SUBNET_NAMES[int(c.host_subnet[start])] == "CONTRACTOR_NETWORK"
 
-    def test_only_red_0_active(self, jax_const):
+    def test_all_red_agents_active(self, jax_const):
         c = jax_const
-        assert c.red_agent_active[0]
-        for i in range(1, NUM_RED_AGENTS):
-            assert not c.red_agent_active[i]
+        for i in range(NUM_RED_AGENTS):
+            assert c.red_agent_active[i]
 
     def test_green_agents_on_user_hosts(self, jax_const):
         c = jax_const

@@ -47,20 +47,21 @@ def load_tensorboard_logs(log_dir: Path):
     return steps, rewards
 
 
-def plot(jax_path, sb3_log_dir, output):
+def plot(jax_path, sb3_log_dir, output, num_agents=5):
     fig, ax = plt.subplots(figsize=(10, 6))
 
     if jax_path and jax_path.exists():
         steps, rewards = load_jax_metrics(jax_path)
-        ax.plot(steps, rewards, label="JAX IPPO", linewidth=2)
+        ax.plot(steps, rewards, label="JAX IPPO (per agent)", linewidth=2)
 
     if sb3_log_dir and sb3_log_dir.exists():
         steps, rewards = load_tensorboard_logs(sb3_log_dir)
         if steps is not None:
-            ax.plot(steps, rewards, label="SB3 PPO", linewidth=2, linestyle="--")
+            rewards_per_agent = rewards / num_agents
+            ax.plot(steps, rewards_per_agent, label="SB3 PPO (per agent)", linewidth=2, linestyle="--")
 
     ax.set_xlabel("Environment Steps")
-    ax.set_ylabel("Mean Episode Return")
+    ax.set_ylabel("Mean Per-Agent Episode Return")
     ax.set_title("CC4 Blue Agent Training: JAX IPPO vs SB3 PPO")
     ax.legend()
     ax.grid(True, alpha=0.3)
