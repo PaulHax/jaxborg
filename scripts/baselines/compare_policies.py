@@ -2,6 +2,8 @@
 
 import json
 import pickle
+import sys
+import time
 from pathlib import Path
 
 import jax
@@ -46,22 +48,14 @@ def classify_action(action_idx: int) -> int:
     return 0
 
 
-def rollout_jax_policy(params, num_episodes=20):
-    from scripts.baselines.train_ippo_cc4 import ActorCritic
-
+def rollout_jax_policy(net_params, network, num_episodes=3):
     env = FsmRedCC4Env(num_steps=500)
-    network = ActorCritic(
-        action_dim=BLUE_ALLOW_TRAFFIC_END,
-        hidden_dim=params.get("hidden_dim", 256),
-        activation="tanh",
-    )
-
-    net_params = params["params"]
 
     all_actions = []
     all_rewards = []
 
     for ep in range(num_episodes):
+        t0 = time.time()
         key = jax.random.PRNGKey(ep * 100)
         obs, env_state = env.reset(key)
 
@@ -69,21 +63,17 @@ def rollout_jax_policy(params, num_episodes=20):
         episode_actions = []
 
         for step in range(500):
-            key, act_key, step_key = jax.random.split(key, 3)
-            for agent_idx in range(NUM_BLUE_AGENTS):
-                agent = f"blue_{agent_idx}"
-                avail = compute_blue_action_mask(env_state.const, agent_idx)
-                pi, _ = network.apply(net_params, obs[agent], avail)
-                action = pi.sample(seed=act_key)
-                episode_actions.append(int(action))
+            key, step_key = jax.random.split(key)
+            act_keys = jax.random.split(key, NUM_BLUE_AGENTS)
 
             actions = {}
-            act_keys = jax.random.split(act_key, NUM_BLUE_AGENTS)
             for agent_idx in range(NUM_BLUE_AGENTS):
                 agent = f"blue_{agent_idx}"
                 avail = compute_blue_action_mask(env_state.const, agent_idx)
                 pi, _ = network.apply(net_params, obs[agent], avail)
-                actions[agent] = pi.sample(seed=act_keys[agent_idx])
+                action = pi.sample(seed=act_keys[agent_idx])
+                actions[agent] = action
+                episode_actions.append(int(action))
 
             obs, env_state, rewards, dones, _ = env.step(step_key, env_state, actions)
             for agent_idx in range(NUM_BLUE_AGENTS):
@@ -94,6 +84,11 @@ def rollout_jax_policy(params, num_episodes=20):
 
         all_actions.extend(episode_actions)
         all_rewards.append(episode_reward)
+        elapsed = time.time() - t0
+        print(
+            f"  Episode {ep + 1}/{num_episodes}: {step + 1} steps, "
+            f"mean_reward={episode_reward.mean():.1f}, time={elapsed:.1f}s"
+        )
 
     return np.array(all_actions), np.array(all_rewards)
 
@@ -153,17 +148,34 @@ def plot_reward_comparison(jax_metrics_path, output_path):
     plt.close(fig)
 
 
+def print_mask_summary():
+    print("\n--- Action Mask Summary ---")
+    env = FsmRedCC4Env(num_steps=100)
+    key = jax.random.PRNGKey(42)
+    _, env_state = env.reset(key)
+
+    for agent_idx in range(NUM_BLUE_AGENTS):
+        mask = np.array(compute_blue_action_mask(env_state.const, agent_idx))
+        total_valid = mask.sum()
+        by_type = []
+        for name, (start, end) in zip(ACTION_TYPE_NAMES, ACTION_TYPE_RANGES):
+            count = mask[start:end].sum()
+            if count > 0:
+                by_type.append(f"{name}={count}")
+        print(f"  blue_{agent_idx}: {total_valid} valid actions: {', '.join(by_type)}")
+
+
 def main():
     jax_dir = EXP_DIR / "ippo_cc4"
     output_dir = EXP_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Plot reward/entropy curves from training metrics
+    print_mask_summary()
+
     jax_metrics = jax_dir / "metrics.jsonl"
     if jax_metrics.exists():
         plot_reward_comparison(jax_metrics, output_dir / "comparison_reward_entropy.png")
 
-    # Load JAX checkpoint and rollout
     checkpoint_path = jax_dir / "checkpoint_final.pkl"
     if checkpoint_path.exists():
         with open(checkpoint_path, "rb") as f:
@@ -176,16 +188,35 @@ def main():
                 config = json.load(f)
                 hidden_dim = config.get("HIDDEN_DIM", 256)
 
-        params = {"params": checkpoint["params"], "hidden_dim": hidden_dim}
-        print("Rolling out JAX IPPO policy...")
-        jax_actions, jax_rewards = rollout_jax_policy(params, num_episodes=10)
+        sys.path.insert(0, str(Path(__file__).parent))
+        from train_ippo_cc4 import ActorCritic
+
+        network = ActorCritic(
+            action_dim=BLUE_ALLOW_TRAFFIC_END,
+            hidden_dim=hidden_dim,
+            activation="tanh",
+        )
+        net_params = checkpoint["params"]
+
+        print("\nRolling out JAX IPPO policy (3 episodes)...")
+        jax_actions, jax_rewards = rollout_jax_policy(net_params, network, num_episodes=3)
         plot_action_distribution(
-            jax_actions, "JAX IPPO Action Distribution (Masked)", output_dir / "comparison_jax_actions.png"
+            jax_actions,
+            "JAX IPPO Action Distribution (Masked)",
+            output_dir / "comparison_jax_actions.png",
         )
 
         print(f"\nJAX IPPO rollout rewards (per agent, {len(jax_rewards)} episodes):")
         print(f"  Mean: {jax_rewards.mean():.2f}")
         print(f"  Std:  {jax_rewards.std():.2f}")
+
+        print("\nAction type breakdown:")
+        counts = np.zeros(len(ACTION_TYPE_NAMES))
+        for a in jax_actions:
+            counts[classify_action(a)] += 1
+        total = counts.sum()
+        for name, count in zip(ACTION_TYPE_NAMES, counts):
+            print(f"  {name}: {count:.0f} ({count / total * 100:.1f}%)")
     else:
         print(f"No JAX checkpoint found at {checkpoint_path}")
         print("Run training first: uv run python scripts/baselines/train_ippo_cc4.py")

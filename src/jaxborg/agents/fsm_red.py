@@ -15,6 +15,7 @@ from jaxborg.actions.encoding import (
 )
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
+    NUM_SUBNETS,
 )
 from jaxborg.state import CC4Const, CC4State
 
@@ -108,19 +109,30 @@ def _fsm_action_to_jax_action(fsm_action, target_host, target_subnet):
     )
 
 
-def fsm_red_get_action(
+def _pick_discover_subnet(state, const, agent_id, key):
+    session_hosts = state.red_sessions[agent_id] & const.host_active
+    subnet_one_hot = jax.nn.one_hot(const.host_subnet, NUM_SUBNETS, dtype=jnp.bool_)
+    session_subnets = jnp.any(session_hosts[:, None] & subnet_one_hot, axis=0)
+    reachable = jnp.any(session_subnets[:, None] & const.subnet_adjacency, axis=0)
+    reachable = reachable | session_subnets
+    probs = jnp.where(reachable, 1.0, 0.0)
+    probs = probs / jnp.maximum(jnp.sum(probs), 1e-8)
+    return jax.random.choice(key, NUM_SUBNETS, p=probs)
+
+
+def fsm_red_get_action_and_info(
     state: CC4State,
     const: CC4Const,
     agent_id: int,
     key: jax.Array,
-) -> int:
+) -> tuple:
     fsm_states = state.fsm_host_states[agent_id]
     discovered = state.red_discovered_hosts[agent_id]
     active = const.host_active
 
     eligible = discovered & active & (fsm_states != FSM_F)
 
-    key1, key2 = jax.random.split(key)
+    key1, key2, key3 = jax.random.split(key, 3)
 
     any_eligible = jnp.any(eligible)
 
@@ -139,10 +151,60 @@ def fsm_red_get_action(
     action_probs = action_probs / jnp.maximum(action_total, 1e-8)
     chosen_fsm_action = jax.random.choice(key2, NUM_FSM_ACTIONS, p=action_probs)
 
-    target_subnet = const.host_subnet[chosen_host]
+    discover_subnet = _pick_discover_subnet(state, const, agent_id, key3)
+    host_subnet = const.host_subnet[chosen_host]
+    target_subnet = jnp.where(chosen_fsm_action == FSM_ACT_DISCOVER, discover_subnet, host_subnet)
     jax_action = _fsm_action_to_jax_action(chosen_fsm_action, chosen_host, target_subnet)
 
-    return jnp.where(any_eligible, jax_action, RED_SLEEP)
+    return (
+        jnp.where(any_eligible, jax_action, RED_SLEEP),
+        chosen_host,
+        chosen_fsm_action,
+        any_eligible,
+    )
+
+
+def fsm_red_get_action(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+    key: jax.Array,
+) -> int:
+    action, _, _, _ = fsm_red_get_action_and_info(state, const, agent_id, key)
+    return action
+
+
+def determine_fsm_success(
+    state_before: CC4State,
+    state_after: CC4State,
+    agent_id: int,
+    target_host: jnp.ndarray,
+    fsm_action: int,
+) -> jnp.ndarray:
+    return jax.lax.switch(
+        fsm_action,
+        [
+            lambda: jnp.any(state_after.red_discovered_hosts[agent_id] & ~state_before.red_discovered_hosts[agent_id]),
+            lambda: (
+                state_after.red_scanned_hosts[agent_id, target_host]
+                & ~state_before.red_scanned_hosts[agent_id, target_host]
+            ),
+            lambda: (
+                state_after.red_scanned_hosts[agent_id, target_host]
+                & ~state_before.red_scanned_hosts[agent_id, target_host]
+            ),
+            lambda: jnp.bool_(True),
+            lambda: state_after.red_sessions[agent_id, target_host] & ~state_before.red_sessions[agent_id, target_host],
+            lambda: (
+                state_after.red_privilege[agent_id, target_host] > state_before.red_privilege[agent_id, target_host]
+            ),
+            lambda: state_after.ot_service_stopped[target_host] & ~state_before.ot_service_stopped[target_host],
+            lambda: jnp.any(
+                state_after.host_service_reliability[target_host] < state_before.host_service_reliability[target_host]
+            ),
+            lambda: ~state_after.red_sessions[agent_id, target_host] & state_before.red_sessions[agent_id, target_host],
+        ],
+    )
 
 
 def fsm_red_update_state(
