@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 
+from jaxborg.actions.rng import sample_green_random
 from jaxborg.constants import (
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
@@ -49,8 +50,9 @@ def _apply_single_green(
     key: jax.Array,
 ) -> CC4State:
     k1, k2, k3, k4, k5, k_svc, k_rel = jax.random.split(key, 7)
+    t = state.time
 
-    action = jax.random.randint(k1, (), 0, NUM_GREEN_ACTIONS)
+    action = sample_green_random(state, t, host_idx, 0, k1, int_range=NUM_GREEN_ACTIONS)
 
     has_service = jnp.any(state.host_services[host_idx])
 
@@ -58,11 +60,11 @@ def _apply_single_green(
     num_active = jnp.sum(active_services)
     svc_indices = jnp.where(active_services, jnp.arange(NUM_SERVICES), NUM_SERVICES)
     sorted_svcs = jnp.sort(svc_indices)
-    svc_rand_idx = jax.random.randint(k_svc, (), 0, jnp.maximum(num_active, 1))
+    svc_rand_idx = sample_green_random(state, t, host_idx, 1, k_svc, int_range=num_active)
     chosen_svc = sorted_svcs[svc_rand_idx]
     chosen_svc = jnp.where(has_service, chosen_svc, jnp.int32(0))
     svc_reliability = state.host_service_reliability[host_idx, chosen_svc]
-    rel_roll = jax.random.randint(k_rel, (), 0, 100)
+    rel_roll = sample_green_random(state, t, host_idx, 2, k_rel, int_range=100)
     work_succeeds = has_service & (rel_roll < svc_reliability)
 
     # -- GreenLocalWork --
@@ -73,11 +75,11 @@ def _apply_single_green(
         state.green_lwf_this_step,
     )
 
-    fp_roll = jax.random.uniform(k2)
+    fp_roll = sample_green_random(state, t, host_idx, 3, k2)
     fp_triggered = fp_roll < FP_DETECTION_RATE
     local_fp = (action == GREEN_LOCAL_WORK) & work_succeeds & fp_triggered
 
-    phish_roll = jax.random.uniform(k3)
+    phish_roll = sample_green_random(state, t, host_idx, 4, k3)
     phish_triggered = phish_roll < PHISHING_ERROR_RATE
     do_phish = (action == GREEN_LOCAL_WORK) & work_succeeds & phish_triggered
 
@@ -122,7 +124,7 @@ def _apply_single_green(
 
     server_indices = jnp.where(is_reachable_server, jnp.arange(GLOBAL_MAX_HOSTS), GLOBAL_MAX_HOSTS)
     sorted_servers = jnp.sort(server_indices)
-    rand_idx = jax.random.randint(k4, (), 0, jnp.maximum(num_reachable, 1))
+    rand_idx = sample_green_random(state, t, host_idx, 5, k4, int_range=num_reachable)
     dest_host = sorted_servers[rand_idx]
     dest_host = jnp.where(has_reachable, dest_host, jnp.int32(0))
 
@@ -134,7 +136,7 @@ def _apply_single_green(
     do_access = (action == GREEN_ACCESS_SERVICE) & has_reachable
 
     access_blocked = do_access & is_blocked
-    access_fp_roll = jax.random.uniform(k5)
+    access_fp_roll = sample_green_random(state, t, host_idx, 6, k5)
     access_fp = do_access & ~is_blocked & (access_fp_roll < FP_DETECTION_RATE)
 
     green_asf_this_step = jnp.where(

@@ -8,6 +8,7 @@ from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.encoding import BLUE_SLEEP, RED_SLEEP
+from jaxborg.actions.green import apply_green_agents
 from jaxborg.agents.fsm_red import fsm_red_init_states
 from jaxborg.constants import NUM_BLUE_AGENTS, NUM_RED_AGENTS
 from jaxborg.state import create_initial_state
@@ -66,6 +67,7 @@ class CC4DifferentialHarness:
         red_cls=FiniteStateRedAgent,
         check_rewards=True,
         check_obs=False,
+        sync_green_rng=False,
     ):
         self.seed = seed
         self.max_steps = max_steps
@@ -74,11 +76,13 @@ class CC4DifferentialHarness:
         self.red_cls = red_cls
         self.check_rewards = check_rewards
         self.check_obs = check_obs
+        self.sync_green_rng = sync_green_rng
         self.cyborg_env = None
         self.jax_state = None
         self.jax_const = None
         self.mappings = None
         self.rng_key = None
+        self.green_recorder = None
 
     def reset(self):
         sg = EnterpriseScenarioGenerator(
@@ -131,6 +135,15 @@ class CC4DifferentialHarness:
         )
 
         self.rng_key = jax.random.PRNGKey(self.seed)
+
+        if self.sync_green_rng:
+            from tests.differential.green_recorder import GreenRecorder
+
+            self.green_recorder = GreenRecorder()
+            self.green_recorder.install(self.cyborg_env, self.mappings)
+            self.jax_state = self.jax_state.replace(
+                use_green_randoms=jnp.array(True),
+            )
 
         from tests.differential.state_comparator import (
             extract_cyborg_snapshot,
@@ -199,6 +212,47 @@ class CC4DifferentialHarness:
             else:
                 aid = _agent_idx(agent_name)
                 self.jax_state = apply_blue_action(self.jax_state, self.jax_const, aid, action_idx)
+
+        from tests.differential.state_comparator import (
+            compare_snapshots,
+            extract_cyborg_snapshot,
+            extract_jax_snapshot,
+        )
+
+        cyborg_snap = extract_cyborg_snapshot(self.cyborg_env, self.mappings)
+        jax_snap = extract_jax_snapshot(self.jax_state, self.jax_const, self.mappings)
+        diffs = compare_snapshots(cyborg_snap, jax_snap)
+
+        return StepResult(step=int(self.jax_state.time), diffs=diffs)
+
+    def full_step(self, red_actions=None, blue_actions=None) -> StepResult:
+        """Single CybORG step processing all agents at once. Required for green RNG sync."""
+        self.rng_key, key_green, *subkeys = jax.random.split(self.rng_key, NUM_RED_AGENTS + 2)
+
+        if red_actions is None:
+            red_actions = {r: RED_SLEEP for r in range(NUM_RED_AGENTS)}
+        if blue_actions is None:
+            blue_actions = {b: BLUE_SLEEP for b in range(NUM_BLUE_AGENTS)}
+
+        cyborg_actions = {}
+        for r, action_idx in red_actions.items():
+            cyborg_actions[f"red_agent_{r}"] = jax_red_to_cyborg(action_idx, r, self.mappings)
+        for b, action_idx in blue_actions.items():
+            cyborg_actions[f"blue_agent_{b}"] = jax_blue_to_cyborg(action_idx, b, self.mappings)
+
+        self.cyborg_env.environment_controller.step(cyborg_actions)
+
+        if self.green_recorder:
+            step_fields = self.green_recorder.extract_step(int(self.jax_state.time))
+            green_randoms = self.jax_state.green_randoms.at[self.jax_state.time].set(jnp.array(step_fields))
+            self.jax_state = self.jax_state.replace(green_randoms=green_randoms)
+
+        for r, action_idx in red_actions.items():
+            self.jax_state = apply_red_action(self.jax_state, self.jax_const, r, action_idx, subkeys[r])
+        for b, action_idx in blue_actions.items():
+            self.jax_state = apply_blue_action(self.jax_state, self.jax_const, b, action_idx)
+
+        self.jax_state = apply_green_agents(self.jax_state, self.jax_const, key_green)
 
         from tests.differential.state_comparator import (
             compare_snapshots,

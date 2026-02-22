@@ -10,6 +10,7 @@ from jaxborg.constants import (
     MISSION_PHASES,
     NUM_BLUE_AGENTS,
     NUM_DECOY_TYPES,
+    NUM_GREEN_RANDOM_FIELDS,
     NUM_RED_AGENTS,
     NUM_SERVICES,
     NUM_SUBNETS,
@@ -86,6 +87,9 @@ class CC4State:
     detection_random_index: chex.Array  # scalar int — next index to consume
     use_detection_randoms: chex.Array  # scalar bool — True = use sequence, False = use JAX RNG
 
+    green_randoms: chex.Array  # (MAX_STEPS, GLOBAL_MAX_HOSTS, 7) float — precomputed green agent randoms
+    use_green_randoms: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
+
 
 def create_initial_const() -> CC4Const:
     return CC4Const(
@@ -143,4 +147,6 @@ def create_initial_state() -> CC4State:
         detection_randoms=jnp.zeros(MAX_DETECTION_RANDOMS, dtype=jnp.float32),
         detection_random_index=jnp.array(0, dtype=jnp.int32),
         use_detection_randoms=jnp.array(False),
+        green_randoms=jnp.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=jnp.float32),
+        use_green_randoms=jnp.array(False),
     )
