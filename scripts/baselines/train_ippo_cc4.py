@@ -62,6 +62,7 @@ class Transition(NamedTuple):
     reward: jnp.ndarray
     log_prob: jnp.ndarray
     obs: jnp.ndarray
+    avail_actions: jnp.ndarray
     info: jnp.ndarray
 
 
@@ -144,8 +145,12 @@ def make_train(config):
 
                 obs_batch = batchify(last_obs, env.agents, config["NUM_ACTORS"])
 
+                # Compute action masks from inner env state (unwrap LogEnvState)
+                avail_actions = jax.vmap(inner_env.get_avail_actions)(env_state.env_state)
+                avail_batch = batchify(avail_actions, env.agents, config["NUM_ACTORS"])
+
                 rng, _rng = jax.random.split(rng)
-                pi, value = network.apply(train_state.params, obs_batch)
+                pi, value = network.apply(train_state.params, obs_batch, avail_batch)
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
                 env_act = unbatchify(action, env.agents, config["NUM_ENVS"], env.num_agents)
@@ -163,6 +168,7 @@ def make_train(config):
                     batchify(reward, env.agents, config["NUM_ACTORS"]).squeeze(),
                     log_prob,
                     obs_batch,
+                    avail_batch,
                     info,
                 )
                 runner_state = (train_state, env_state, obsv, rng)
@@ -199,7 +205,7 @@ def make_train(config):
                     traj_batch, advantages, targets = batch_info
 
                     def _loss_fn(params, traj_batch, gae, targets):
-                        pi, value = network.apply(params, traj_batch.obs)
+                        pi, value = network.apply(params, traj_batch.obs, traj_batch.avail_actions)
                         log_prob = pi.log_prob(traj_batch.action)
 
                         value_pred_clipped = traj_batch.value + (value - traj_batch.value).clip(

@@ -11,6 +11,7 @@ from jaxmarl.environments.spaces import Box, Discrete
 from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, RED_WITHDRAW_END
 from jaxborg.actions.green import apply_green_agents
+from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.agents.fsm_red import fsm_red_init_states
 from jaxborg.constants import (
     BLUE_OBS_SIZE,
@@ -216,8 +217,8 @@ class CC4Env(MultiAgentEnv):
     @partial(jax.jit, static_argnums=[0])
     def get_avail_actions(self, env_state: CC4EnvState) -> Dict[str, chex.Array]:
         masks = {}
-        for agent in self.blue_agents:
-            masks[agent] = jnp.ones(BLUE_ALLOW_TRAFFIC_END, dtype=jnp.bool_)
+        for i in range(NUM_BLUE_AGENTS):
+            masks[f"blue_{i}"] = compute_blue_action_mask(env_state.const, i)
         for agent in self.red_agents:
             masks[agent] = jnp.ones(RED_WITHDRAW_END, dtype=jnp.bool_)
         return masks
