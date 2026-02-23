@@ -37,6 +37,9 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         )
         red_discovered = red_discovered.at[r].set(jnp.where(is_dest, True, red_discovered[r]))
 
+    # Any host with an active red session must be discoverable by that red agent.
+    red_discovered = red_discovered | red_sessions
+
     host_compromised = jnp.where(
         any_transferred,
         jnp.maximum(state.host_compromised, max_transferred_priv),
