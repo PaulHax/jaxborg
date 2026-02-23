@@ -67,6 +67,48 @@ CybORG and JAX use independent RNG streams, making direct comparison of random-d
 To run green parity tests: `uv run pytest tests/test_green_parity.py -v` (requires CybORG).
 To run green unit tests (no CybORG): `uv run pytest tests/test_green_unit.py -v`.
 
+## Fixing Differential Gaps
+
+The differential fuzzer (`tests/differential/fuzzer.py`) systematically finds CybORG/JAX state divergences by running full episodes across many seeds. Run it:
+
+```bash
+uv run python -m tests.differential.fuzzer          # 20 seeds × 100 steps
+```
+
+It returns a `MismatchReport` on the first error: seed, step, field name, CybORG vs JAX values.
+
+### Investigation workflow
+
+1. **Reproduce**: write a failing test that runs the harness to the failing seed/step. Place the test in the appropriate file:
+   - Red action bugs → `tests/subsystems/test_red_*.py` (exploit, discover, privesc, etc.)
+   - Blue action bugs → `tests/subsystems/test_blue_*.py`
+   - Green/phishing bugs → `tests/test_green_parity.py`
+   - Session/topology bugs → `tests/subsystems/test_dynamic_topology.py`
+   - FSM state machine bugs → `tests/subsystems/test_fsm_red_agent.py`
+   - Reward/phase bugs → `tests/subsystems/test_rewards.py` or `tests/subsystems/test_phase_transitions.py`
+   - Cross-cutting or unclear → `tests/test_fuzz_gaps.py` (catch-all for fuzzer-found gaps)
+2. **Read CybORG source** at `.venv/lib/python3.11/site-packages/CybORG/` to understand the mechanic causing the divergence
+3. **Fix the JAX code** in `src/jaxborg/` to match CybORG's behavior
+4. **Verify**: `uv run pytest tests/ -v --ignore=tests/test_env_smoke.py --ignore=tests/test_training_parity.py -x`
+5. **Lint**: `uv run ruff check --fix . && uv run ruff format .`
+6. **Commit** with a message describing the gap and fix
+
+### Common root causes
+
+- JAX doesn't model a CybORG mechanic (action duration, session reassignment, observation-based tracking)
+- JAX success conditions differ from CybORG (missing service check, wrong subnet logic, no decoy handling)
+- Translator creates wrong CybORG action type or missing parameters (e.g. ExploitRemoteService needs a FixedExploitSelector)
+- Timing: CybORG multi-tick actions (duration > 1) need deferred JAX execution via `_red_pending_jax` in the harness
+
+### Key CybORG entry points for investigation
+
+- `SimulationController.step()` — action submission, `actions_in_progress` duration tracking
+- `ActionSpace.update()` — observation-based validity tracking (subnets, IPs)
+- `replace_action_if_invalid()` — action type/parameter validation
+- `ExploitRemoteService.execute()` — delegates to concrete exploit via selector
+- `FiniteStateRedAgent` — CybORG's FSM, uses `ExploitRemoteService` (duration=4)
+- `different_subnet_agent_reassignment()` — green phishing session transfers
+
 ## Linting
 
 Run `uv run ruff check --fix . && uv run ruff format .` before committing.
