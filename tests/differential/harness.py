@@ -66,6 +66,48 @@ class TestResult:
     error_diffs: int = 0
 
 
+_ZERO_INT_HOSTS = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
+_ZERO_BOOL_HOSTS = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
+
+
+@jax.jit
+def _jit_fsm_red_get_action_and_info(state, const, agent_id, key):
+    return fsm_red_get_action_and_info(state, const, jnp.int32(agent_id), key)
+
+
+@jax.jit
+def _jit_apply_red_action(state, const, agent_id, action_idx, key):
+    return apply_red_action(state, const, jnp.int32(agent_id), jnp.int32(action_idx), key)
+
+
+@jax.jit
+def _jit_apply_blue_action(state, const, agent_id, action_idx):
+    return apply_blue_action(state, const, jnp.int32(agent_id), jnp.int32(action_idx))
+
+
+@jax.jit
+def _jit_advance_and_clear(state, const):
+    state = advance_mission_phase(state, const)
+    return state.replace(
+        red_activity_this_step=_ZERO_INT_HOSTS,
+        green_lwf_this_step=_ZERO_BOOL_HOSTS,
+        green_asf_this_step=_ZERO_BOOL_HOSTS,
+        host_activity_detected=_ZERO_BOOL_HOSTS,
+    )
+
+
+@jax.jit
+def _jit_fsm_red_post_step_update(state_before, state_after, const, target_hosts, fsm_actions, eligible_flags):
+    return fsm_red_post_step_update(
+        state_before,
+        state_after,
+        const,
+        target_hosts,
+        fsm_actions,
+        eligible_flags,
+    )
+
+
 @jax.jit
 def _jit_green_and_reassign(state, const, key):
     state = apply_green_agents(state, const, key)
@@ -112,6 +154,60 @@ class CC4DifferentialHarness:
 
         self.jax_const = build_const_from_cyborg(self.cyborg_env)
         self.mappings = build_mappings_from_cyborg(self.cyborg_env)
+        cyborg_state = self.cyborg_env.environment_controller.state
+        controller = self.cyborg_env.environment_controller
+
+        # CybORG action spaces seed red knowledge (known IPs/processes) even for
+        # agents without active sessions. Mirror that into JAX init state.
+        known_hosts_by_red = [set() for _ in range(NUM_RED_AGENTS)]
+        scanned_hosts_by_red = [set() for _ in range(NUM_RED_AGENTS)]
+        red_start_hosts = self.jax_const.red_start_hosts
+        red_agent_active = self.jax_const.red_agent_active
+        red_initial_discovered = self.jax_const.red_initial_discovered_hosts
+        red_initial_scanned = self.jax_const.red_initial_scanned_hosts
+
+        pid_to_host_idx = {}
+        for hostname, host in cyborg_state.hosts.items():
+            if hostname not in self.mappings.hostname_to_idx:
+                continue
+            hidx = self.mappings.hostname_to_idx[hostname]
+            for proc in host.processes:
+                pid = getattr(proc, "pid", None)
+                if pid is not None:
+                    pid_to_host_idx[int(pid)] = hidx
+
+        for r in range(NUM_RED_AGENTS):
+            iface = controller.agent_interfaces.get(f"red_agent_{r}")
+            if iface is None:
+                continue
+            aspace = iface.action_space
+
+            for ip, known in getattr(aspace, "ip_address", {}).items():
+                if not known:
+                    continue
+                hostname = cyborg_state.ip_addresses.get(ip)
+                if hostname in self.mappings.hostname_to_idx:
+                    known_hosts_by_red[r].add(self.mappings.hostname_to_idx[hostname])
+
+            for pid, known in getattr(aspace, "process", {}).items():
+                if known and int(pid) in pid_to_host_idx:
+                    scanned_hosts_by_red[r].add(pid_to_host_idx[int(pid)])
+
+            if known_hosts_by_red[r]:
+                red_agent_active = red_agent_active.at[r].set(True)
+                red_start_hosts = red_start_hosts.at[r].set(min(known_hosts_by_red[r]))
+
+            for hidx in known_hosts_by_red[r]:
+                red_initial_discovered = red_initial_discovered.at[r, hidx].set(True)
+            for hidx in scanned_hosts_by_red[r]:
+                red_initial_scanned = red_initial_scanned.at[r, hidx].set(True)
+
+        self.jax_const = self.jax_const.replace(
+            red_start_hosts=red_start_hosts,
+            red_agent_active=red_agent_active,
+            red_initial_discovered_hosts=red_initial_discovered,
+            red_initial_scanned_hosts=red_initial_scanned,
+        )
 
         self.jax_state = create_initial_state()
         self.jax_state = self.jax_state.replace(
@@ -120,10 +216,10 @@ class CC4DifferentialHarness:
 
         start_sessions = jnp.zeros_like(self.jax_state.red_sessions)
         start_priv = jnp.zeros_like(self.jax_state.red_privilege)
-        start_discovered = jnp.zeros_like(self.jax_state.red_discovered_hosts)
+        start_discovered = jnp.array(self.jax_const.red_initial_discovered_hosts)
+        start_scanned = jnp.array(self.jax_const.red_initial_scanned_hosts)
         host_compromised = self.jax_state.host_compromised
         fsm_states = self.jax_state.fsm_host_states
-        cyborg_state = self.cyborg_env.environment_controller.state
         for agent_name, sessions in cyborg_state.sessions.items():
             if not agent_name.startswith("red_agent_"):
                 continue
@@ -142,10 +238,12 @@ class CC4DifferentialHarness:
                     host_compromised = host_compromised.at[hidx].set(jnp.maximum(host_compromised[hidx], level))
             if self.jax_const.red_agent_active[red_idx]:
                 fsm_states = fsm_states.at[red_idx].set(fsm_red_init_states(self.jax_const, red_idx))
+
         self.jax_state = self.jax_state.replace(
             red_sessions=start_sessions,
             red_privilege=start_priv,
             red_discovered_hosts=start_discovered,
+            red_scanned_hosts=start_scanned,
             host_compromised=host_compromised,
             fsm_host_states=fsm_states,
         )
@@ -253,13 +351,7 @@ class CC4DifferentialHarness:
         use_fsm = self.red_cls is FiniteStateRedAgent
 
         # --- Mirror step_env: advance phase + clear per-step fields ---
-        self.jax_state = advance_mission_phase(self.jax_state, self.jax_const)
-        self.jax_state = self.jax_state.replace(
-            red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
-            green_lwf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
-            green_asf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
-            host_activity_detected=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
-        )
+        self.jax_state = _jit_advance_and_clear(self.jax_state, self.jax_const)
 
         state_before = self.jax_state
 
@@ -270,7 +362,7 @@ class CC4DifferentialHarness:
         eligible_flags = []
         for r in range(NUM_RED_AGENTS):
             if use_fsm:
-                action, host, fsm_act, eligible = fsm_red_get_action_and_info(
+                action, host, fsm_act, eligible = _jit_fsm_red_get_action_and_info(
                     self.jax_state, self.jax_const, r, red_keys[r]
                 )
                 red_actions[r] = int(action)
@@ -310,26 +402,26 @@ class CC4DifferentialHarness:
             aip = controller.actions_in_progress.get(f"red_agent_{r}")
             if aip is None and self._red_pending_jax[r] is not None:
                 action_idx, key = self._red_pending_jax[r]
-                self.jax_state = apply_red_action(self.jax_state, self.jax_const, r, action_idx, key)
+                self.jax_state = _jit_apply_red_action(self.jax_state, self.jax_const, r, action_idx, key)
                 self._red_pending_jax[r] = None
 
         # --- JAX blue actions ---
         for b, action_idx in blue_actions.items():
             if action_idx != BLUE_SLEEP:
-                self.jax_state = apply_blue_action(self.jax_state, self.jax_const, b, action_idx)
+                self.jax_state = _jit_apply_blue_action(self.jax_state, self.jax_const, b, action_idx)
 
         # --- JAX green + reassign (JIT'd) ---
         self.jax_state = _jit_green_and_reassign(self.jax_state, self.jax_const, key_green)
 
         # --- FSM state updates (shared with FsmRedCC4Env) ---
         if use_fsm:
-            self.jax_state = fsm_red_post_step_update(
+            self.jax_state = _jit_fsm_red_post_step_update(
                 state_before,
                 self.jax_state,
                 self.jax_const,
-                target_hosts,
-                fsm_actions,
-                eligible_flags,
+                jnp.asarray(target_hosts, dtype=jnp.int32),
+                jnp.asarray(fsm_actions, dtype=jnp.int32),
+                jnp.asarray(eligible_flags, dtype=jnp.bool_),
             )
 
         # --- Time increment ---

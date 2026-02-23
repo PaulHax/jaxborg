@@ -59,6 +59,8 @@ class TestStructsImportable:
         assert const.host_active.shape == (GLOBAL_MAX_HOSTS,)
         assert const.subnet_adjacency.shape == (NUM_SUBNETS, NUM_SUBNETS)
         assert const.phase_rewards.shape == (MISSION_PHASES, NUM_SUBNETS, 3)
+        assert const.red_initial_discovered_hosts.shape == (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS)
+        assert const.red_initial_scanned_hosts.shape == (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS)
 
     def test_cc4_state_creates(self):
         state = create_initial_state()
@@ -112,6 +114,25 @@ class TestCatalog:
     def test_subsystem_22_depends_on_all_others(self):
         s22 = SUBSYSTEMS_BY_ID[22]
         assert set(s22.depends_on) == set(range(1, 22))
+
+
+class TestCoreEnvInit:
+    def test_init_red_state_uses_const_initial_discovery_and_scanning(self):
+        from jaxborg.env import _init_red_state
+
+        const = create_initial_const()
+        state = create_initial_state()
+        discovered = jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_).at[0, 11].set(True)
+        scanned = jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_).at[0, 17].set(True)
+        const = const.replace(
+            red_initial_discovered_hosts=discovered,
+            red_initial_scanned_hosts=scanned,
+        )
+
+        updated = _init_red_state(const, state)
+
+        assert bool(updated.red_discovered_hosts[0, 11])
+        assert bool(updated.red_scanned_hosts[0, 17])
 
 
 class TestStubsImportable:

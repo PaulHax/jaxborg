@@ -36,7 +36,8 @@ class CC4EnvState:
 def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
     red_sessions = state.red_sessions
     red_privilege = state.red_privilege
-    red_discovered = state.red_discovered_hosts
+    red_discovered = state.red_discovered_hosts | const.red_initial_discovered_hosts
+    red_scanned = state.red_scanned_hosts | const.red_initial_scanned_hosts
     fsm_states = state.fsm_host_states
     host_compromised = state.host_compromised
 
@@ -73,6 +74,7 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
         red_sessions=red_sessions,
         red_privilege=red_privilege,
         red_discovered_hosts=red_discovered,
+        red_scanned_hosts=red_scanned,
         host_compromised=host_compromised,
         fsm_host_states=fsm_states,
     )

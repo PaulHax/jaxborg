@@ -254,6 +254,11 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
                 cyborg_suffix = str(sub_enum)
                 if cyborg_suffix in CYBORG_SUFFIX_TO_ID:
                     red_agent_subnets[red_idx, CYBORG_SUFFIX_TO_ID[cyborg_suffix]] = True
+    red_initial_discovered_hosts = np.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=bool)
+    red_initial_scanned_hosts = np.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=bool)
+    for red_idx in range(NUM_RED_AGENTS):
+        if red_agent_active[red_idx]:
+            red_initial_discovered_hosts[red_idx, red_start_hosts[red_idx]] = True
 
     green_agent_host = np.full(GLOBAL_MAX_HOSTS, -1, dtype=np.int32)
     green_agent_active = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
@@ -291,6 +296,8 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
         red_start_hosts=jnp.array(red_start_hosts),
         red_agent_active=jnp.array(red_agent_active),
         red_agent_subnets=jnp.array(red_agent_subnets),
+        red_initial_discovered_hosts=jnp.array(red_initial_discovered_hosts),
+        red_initial_scanned_hosts=jnp.array(red_initial_scanned_hosts),
         green_agent_host=jnp.array(green_agent_host),
         green_agent_active=jnp.array(green_agent_active),
         num_green_agents=green_count,
@@ -458,6 +465,11 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
         if non_router_hosts:
             red_start_hosts[i] = rng.choice(non_router_hosts)
             red_agent_active[i] = True
+    red_initial_discovered_hosts = np.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=bool)
+    red_initial_scanned_hosts = np.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=bool)
+    for red_idx in range(NUM_RED_AGENTS):
+        if red_agent_active[red_idx]:
+            red_initial_discovered_hosts[red_idx, red_start_hosts[red_idx]] = True
 
     green_agent_host = np.full(GLOBAL_MAX_HOSTS, -1, dtype=np.int32)
     green_agent_active = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
@@ -490,6 +502,8 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
         red_start_hosts=jnp.array(red_start_hosts),
         red_agent_active=jnp.array(red_agent_active),
         red_agent_subnets=jnp.array(red_agent_subnets),
+        red_initial_discovered_hosts=jnp.array(red_initial_discovered_hosts),
+        red_initial_scanned_hosts=jnp.array(red_initial_scanned_hosts),
         green_agent_host=jnp.array(green_agent_host),
         green_agent_active=jnp.array(green_agent_active),
         num_green_agents=green_count,

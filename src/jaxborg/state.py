@@ -38,6 +38,8 @@ class CC4Const:
     red_start_hosts: chex.Array  # (NUM_RED_AGENTS,) int
     red_agent_active: chex.Array  # (NUM_RED_AGENTS,) bool
     red_agent_subnets: chex.Array  # (NUM_RED_AGENTS, NUM_SUBNETS) bool — allowed subnets per red agent
+    red_initial_discovered_hosts: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
+    red_initial_scanned_hosts: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
 
     green_agent_host: chex.Array  # (GLOBAL_MAX_HOSTS,) int — green agent index per host, -1 if none
     green_agent_active: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
@@ -112,6 +114,8 @@ def create_initial_const() -> CC4Const:
         red_start_hosts=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_agent_active=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_),
         red_agent_subnets=jnp.zeros((NUM_RED_AGENTS, NUM_SUBNETS), dtype=jnp.bool_),
+        red_initial_discovered_hosts=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
+        red_initial_scanned_hosts=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         green_agent_host=jnp.full(GLOBAL_MAX_HOSTS, -1, dtype=jnp.int32),
         green_agent_active=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         num_green_agents=0,
