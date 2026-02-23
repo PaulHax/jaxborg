@@ -14,7 +14,15 @@ def apply_privesc(
     is_active = const.host_active[target_host]
     has_session = state.red_sessions[agent_id, target_host]
     not_already_privileged = state.red_privilege[agent_id, target_host] < COMPROMISE_PRIVILEGED
-    success = is_active & has_session & not_already_privileged
+    is_sandboxed = state.red_session_sandboxed[agent_id, target_host]
+    success = is_active & has_session & not_already_privileged & ~is_sandboxed
+
+    # Sandboxed sessions are removed on escalation attempt (CybORG PrivilegeEscalate behavior)
+    red_sessions = jnp.where(
+        is_active & has_session & is_sandboxed,
+        state.red_sessions.at[agent_id, target_host].set(False),
+        state.red_sessions,
+    )
 
     new_priv = jnp.where(success, COMPROMISE_PRIVILEGED, state.red_privilege[agent_id, target_host])
     red_privilege = jnp.where(
@@ -38,6 +46,7 @@ def apply_privesc(
     )
 
     return state.replace(
+        red_sessions=red_sessions,
         red_privilege=red_privilege,
         host_compromised=host_compromised,
         red_activity_this_step=activity,

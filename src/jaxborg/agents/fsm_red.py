@@ -209,6 +209,7 @@ def determine_fsm_success(
 
 def fsm_red_update_state(
     fsm_states: jnp.ndarray,
+    const: CC4Const,
     agent_id: int,
     target_host: jnp.ndarray,
     fsm_action: int,
@@ -222,6 +223,11 @@ def fsm_red_update_state(
 
     valid = next_state != _SENTINEL
     new_state = jnp.where(valid, next_state, cur)
+
+    # CybORG U→F guard: hosts outside agent's subnets can't reach user-level access
+    host_subnet = const.host_subnet[target_host]
+    in_allowed_subnets = const.red_agent_subnets[agent_id, host_subnet]
+    new_state = jnp.where((new_state == FSM_U) & ~in_allowed_subnets, FSM_F, new_state)
 
     return fsm_states.at[agent_id, target_host].set(new_state)
 

@@ -237,6 +237,7 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
 
     red_start_hosts = np.zeros(NUM_RED_AGENTS, dtype=np.int32)
     red_agent_active = np.zeros(NUM_RED_AGENTS, dtype=bool)
+    red_agent_subnets = np.zeros((NUM_RED_AGENTS, NUM_SUBNETS), dtype=bool)
     for agent_name, agent_info in scenario.agents.items():
         if not agent_name.startswith("red_agent_"):
             continue
@@ -248,6 +249,12 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
             if sess.hostname in hostname_to_idx:
                 red_start_hosts[red_idx] = hostname_to_idx[sess.hostname]
         red_agent_active[red_idx] = agent_info.active
+        if agent_info.allowed_subnets:
+            for sub_enum in agent_info.allowed_subnets:
+                sub_name = str(sub_enum).split(".")[-1] if "." in str(sub_enum) else str(sub_enum)
+                cyborg_suffix = sub_name.lower() + "_subnet"
+                if cyborg_suffix in CYBORG_SUFFIX_TO_ID:
+                    red_agent_subnets[red_idx, CYBORG_SUFFIX_TO_ID[cyborg_suffix]] = True
 
     green_agent_host = np.full(GLOBAL_MAX_HOSTS, -1, dtype=np.int32)
     green_agent_active = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
@@ -284,6 +291,7 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
         blue_agent_hosts=jnp.array(blue_agent_hosts),
         red_start_hosts=jnp.array(red_start_hosts),
         red_agent_active=jnp.array(red_agent_active),
+        red_agent_subnets=jnp.array(red_agent_subnets),
         green_agent_host=jnp.array(green_agent_host),
         green_agent_active=jnp.array(green_agent_active),
         num_green_agents=green_count,
@@ -436,7 +444,10 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
 
     red_start_hosts = np.zeros(NUM_RED_AGENTS, dtype=np.int32)
     red_agent_active = np.zeros(NUM_RED_AGENTS, dtype=bool)
+    red_agent_subnets = np.zeros((NUM_RED_AGENTS, NUM_SUBNETS), dtype=bool)
     for i, snames in enumerate(RED_AGENT_SUBNETS):
+        for sn in snames:
+            red_agent_subnets[i, SUBNET_IDS[sn]] = True
         non_router_hosts = [
             h
             for h in range(num_hosts)
@@ -479,6 +490,7 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
         blue_agent_hosts=jnp.array(blue_agent_hosts),
         red_start_hosts=jnp.array(red_start_hosts),
         red_agent_active=jnp.array(red_agent_active),
+        red_agent_subnets=jnp.array(red_agent_subnets),
         green_agent_host=jnp.array(green_agent_host),
         green_agent_active=jnp.array(green_agent_active),
         num_green_agents=green_count,

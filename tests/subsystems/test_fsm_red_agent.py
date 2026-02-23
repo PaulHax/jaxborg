@@ -86,32 +86,47 @@ class TestTransitionMatrices:
 
 
 class TestFsmUpdateState:
-    def test_K_success_discover_transitions_to_KD(self):
+    def test_K_success_discover_transitions_to_KD(self, jax_const):
         fsm = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), FSM_K, dtype=jnp.int32)
-        new_fsm = fsm_red_update_state(fsm, 0, jnp.int32(5), FSM_ACT_DISCOVER, jnp.bool_(True))
+        new_fsm = fsm_red_update_state(fsm, jax_const, 0, jnp.int32(5), FSM_ACT_DISCOVER, jnp.bool_(True))
         assert int(new_fsm[0, 5]) == FSM_KD
 
-    def test_S_failure_exploit_stays_S(self):
+    def test_S_failure_exploit_stays_S(self, jax_const):
         fsm = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), FSM_S, dtype=jnp.int32)
-        new_fsm = fsm_red_update_state(fsm, 0, jnp.int32(10), FSM_ACT_EXPLOIT, jnp.bool_(False))
+        new_fsm = fsm_red_update_state(fsm, jax_const, 0, jnp.int32(10), FSM_ACT_EXPLOIT, jnp.bool_(False))
         assert int(new_fsm[0, 10]) == FSM_S
 
-    def test_invalid_action_preserves_state(self):
+    def test_invalid_action_preserves_state(self, jax_const):
         fsm = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), FSM_K, dtype=jnp.int32)
-        new_fsm = fsm_red_update_state(fsm, 0, jnp.int32(5), FSM_ACT_EXPLOIT, jnp.bool_(True))
+        new_fsm = fsm_red_update_state(fsm, jax_const, 0, jnp.int32(5), FSM_ACT_EXPLOIT, jnp.bool_(True))
         assert int(new_fsm[0, 5]) == FSM_K
 
-    def test_update_does_not_affect_other_hosts(self):
+    def test_update_does_not_affect_other_hosts(self, jax_const):
         fsm = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), FSM_K, dtype=jnp.int32)
-        new_fsm = fsm_red_update_state(fsm, 0, jnp.int32(5), FSM_ACT_DISCOVER, jnp.bool_(True))
+        new_fsm = fsm_red_update_state(fsm, jax_const, 0, jnp.int32(5), FSM_ACT_DISCOVER, jnp.bool_(True))
         assert int(new_fsm[0, 5]) == FSM_KD
         assert int(new_fsm[0, 6]) == FSM_K
 
-    def test_update_does_not_affect_other_agents(self):
+    def test_update_does_not_affect_other_agents(self, jax_const):
+        h = int(jax_const.red_start_hosts[0])
         fsm = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), FSM_S, dtype=jnp.int32)
-        new_fsm = fsm_red_update_state(fsm, 0, jnp.int32(5), FSM_ACT_EXPLOIT, jnp.bool_(True))
-        assert int(new_fsm[0, 5]) == FSM_U
-        assert int(new_fsm[1, 5]) == FSM_S
+        new_fsm = fsm_red_update_state(fsm, jax_const, 0, jnp.int32(h), FSM_ACT_EXPLOIT, jnp.bool_(True))
+        assert int(new_fsm[0, h]) == FSM_U
+        assert int(new_fsm[1, h]) == FSM_S
+
+    def test_U_to_F_on_foreign_subnet(self, jax_const):
+        """Exploit success on a host outside agent's subnets should transition to F, not U."""
+        agent_subnets = jax_const.red_agent_subnets[0]
+        foreign_host = None
+        for h in range(GLOBAL_MAX_HOSTS):
+            if jax_const.host_active[h] and not agent_subnets[jax_const.host_subnet[h]]:
+                foreign_host = h
+                break
+        if foreign_host is None:
+            pytest.skip("No foreign host found")
+        fsm = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), FSM_S, dtype=jnp.int32)
+        new_fsm = fsm_red_update_state(fsm, jax_const, 0, jnp.int32(foreign_host), FSM_ACT_EXPLOIT, jnp.bool_(True))
+        assert int(new_fsm[0, foreign_host]) == FSM_F
 
 
 class TestFsmGetAction:

@@ -37,31 +37,18 @@ default 100). `DegradeServices` decrements by 20 (clamped to 0). `GreenLocalWork
 a random active service and checks `randint(0, 100) < reliability` before executing.
 `Restore` resets reliability to 100.
 
-## Privilege Escalation: No Sandbox Check
+## ~~Privilege Escalation: No Sandbox Check~~ RESOLVED
 
-CybORG's `PrivilegeEscalate` checks `is_escalate_sandbox` on red sessions during
-escalation. If a session was created by exploiting a sandboxed decoy process, escalation
-fails.
+Now matches CybORG: `apply_privesc` checks `red_session_sandboxed[agent_id, target_host]`.
+If the session was created by exploiting a sandboxed decoy process, escalation fails and
+the session is removed. None of the 4 CC4 decoy types currently use `SANDBOXING_EXPLOIT`,
+but the check is in place for future decoy types.
 
-The JAX implementation skips this check. However, none of the 4 CC4 decoy types
-(HarakaSMPT, Apache, Tomcat, Vsftpd) have `DecoyType.ESCALATE` (they all use
-`DecoyType.EXPLOIT`), so sandboxed sessions never occur in CC4. No practical impact.
+## ~~FSM Red Agent: No U→F Subnet Guard~~ RESOLVED
 
-- JAX: `red_privesc.py` — no sandbox check
-- CybORG: `PrivilegeEscalate.py` → checks `is_escalate_sandbox`
-
-## FSM Red Agent: No U→F Subnet Guard
-
-CybORG's `FiniteStateRedAgent` transitions a host from state U (user access) to F
-(failed) if the host is outside the red agent's allowed subnets. This prevents the FSM
-from attempting further actions on unreachable hosts.
-
-The JAX implementation does not implement this guard. In practice, red agents can only
-reach hosts they've discovered via `DiscoverRemoteSystems` on their assigned subnets, so
-out-of-subnet hosts would never reach state U through normal gameplay.
-
-- JAX: `fsm_red.py` — no subnet check on U state
-- CybORG: `FiniteStateRedAgent.py` — `if subnet not in self.allowed_subnets: state = 'F'`
+Now matches CybORG: `fsm_red_update_state` checks if the target host is in the agent's
+allowed subnets (via `red_agent_subnets` in CC4Const). If a host would transition to
+state U but is outside the agent's subnets, it transitions to F instead.
 
 ## ~~Withdraw: Unconditional host_compromised Clear~~ RESOLVED
 

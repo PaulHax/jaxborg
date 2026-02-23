@@ -110,7 +110,7 @@ class FsmRedCC4Env(MultiAgentEnv):
         for r in range(NUM_RED_AGENTS):
             success = determine_fsm_success(state_before, state_after, r, target_hosts[r], fsm_actions[r])
             skip = ~eligible_flags[r] | (fsm_actions[r] == FSM_ACT_DISCOVER_DECEPTION)
-            updated = fsm_red_update_state(fsm_states, r, target_hosts[r], fsm_actions[r], success)
+            updated = fsm_red_update_state(fsm_states, env_state.const, r, target_hosts[r], fsm_actions[r], success)
             fsm_states = jnp.where(skip, fsm_states, updated)
 
         for r in range(NUM_RED_AGENTS):

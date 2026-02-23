@@ -37,6 +37,7 @@ class CC4Const:
     blue_agent_hosts: chex.Array  # (NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS) bool
     red_start_hosts: chex.Array  # (NUM_RED_AGENTS,) int
     red_agent_active: chex.Array  # (NUM_RED_AGENTS,) bool
+    red_agent_subnets: chex.Array  # (NUM_RED_AGENTS, NUM_SUBNETS) bool — allowed subnets per red agent
 
     green_agent_host: chex.Array  # (GLOBAL_MAX_HOSTS,) int — green agent index per host, -1 if none
     green_agent_active: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
@@ -87,6 +88,8 @@ class CC4State:
     detection_random_index: chex.Array  # scalar int — next index to consume
     use_detection_randoms: chex.Array  # scalar bool — True = use sequence, False = use JAX RNG
 
+    red_session_sandboxed: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool — sandboxed exploit sessions
+
     green_randoms: chex.Array  # (MAX_STEPS, GLOBAL_MAX_HOSTS, 7) float — precomputed green agent randoms
     use_green_randoms: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
 
@@ -108,6 +111,7 @@ def create_initial_const() -> CC4Const:
         blue_agent_hosts=jnp.zeros((NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_start_hosts=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_agent_active=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_),
+        red_agent_subnets=jnp.zeros((NUM_RED_AGENTS, NUM_SUBNETS), dtype=jnp.bool_),
         green_agent_host=jnp.full(GLOBAL_MAX_HOSTS, -1, dtype=jnp.int32),
         green_agent_active=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         num_green_agents=0,
@@ -142,6 +146,7 @@ def create_initial_state() -> CC4State:
         blocked_zones=jnp.zeros((NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_),
         messages=jnp.zeros((NUM_BLUE_AGENTS, NUM_BLUE_AGENTS, MESSAGE_LENGTH), dtype=jnp.float32),
         fsm_host_states=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
+        red_session_sandboxed=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         green_lwf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         green_asf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         detection_randoms=jnp.zeros(MAX_DETECTION_RANDOMS, dtype=jnp.float32),
