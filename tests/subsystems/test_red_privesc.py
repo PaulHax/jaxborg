@@ -166,6 +166,24 @@ class TestApplyPrivesc:
         new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert bool(new_state.red_sessions[0, target])
 
+    def test_privesc_discovers_host_info_links_on_success(self, jax_const):
+        target = _find_exploitable_host(jax_const)
+        if target is None:
+            pytest.skip("No exploitable host found")
+
+        linked_host = next((h for h in range(jax_const.num_hosts) if h != target and jax_const.host_active[h]), None)
+        if linked_host is None:
+            pytest.skip("No linked host candidate found")
+
+        host_info_links = jnp.zeros_like(jax_const.host_info_links).at[target, linked_host].set(True)
+        const = jax_const.replace(host_info_links=host_info_links)
+        state = _setup_exploited_state(const, target)
+        assert not bool(state.red_discovered_hosts[0, linked_host])
+
+        action_idx = encode_red_action("PrivilegeEscalate", target, 0)
+        new_state = apply_red_action(state, const, 0, action_idx, jax.random.PRNGKey(0))
+        assert bool(new_state.red_discovered_hosts[0, linked_host])
+
     def test_privesc_does_not_affect_other_agents(self, jax_const):
         target = _find_exploitable_host(jax_const)
         if target is None:
@@ -397,3 +415,45 @@ class TestDifferentialWithCybORG:
         jax_success = int(new_state.red_privilege[0, target_h]) >= COMPROMISE_PRIVILEGED
 
         assert not jax_success and not cyborg_success
+
+    def test_privesc_discovers_info_link_hosts_matches_cyborg(self, cyborg_and_jax):
+        cyborg_env, const, state = cyborg_and_jax
+        state, target_h, target_hostname, _ = self._find_and_exploit_host(cyborg_env, const, state)
+        cyborg_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cyborg_state.hosts.keys())
+        hostname_to_idx = {hostname: idx for idx, hostname in enumerate(sorted_hosts)}
+
+        linked_host_idxs = np.where(np.array(const.host_info_links[target_h]))[0].tolist()
+        if not linked_host_idxs:
+            pytest.skip("Target host has no info-link hosts")
+
+        action_space = cyborg_env.environment_controller.agent_interfaces["red_agent_0"].action_space
+        known_before = {
+            hostname_to_idx[cyborg_state.ip_addresses[ip]]
+            for ip, is_known in action_space.ip_address.items()
+            if is_known and ip in cyborg_state.ip_addresses and cyborg_state.ip_addresses[ip] in hostname_to_idx
+        }
+        jax_known_before = set(np.where(np.array(state.red_discovered_hosts[0]))[0].tolist())
+
+        unseen_linked = [h for h in linked_host_idxs if h not in known_before and h not in jax_known_before]
+        if not unseen_linked:
+            pytest.skip("No unseen info-link host available for differential assertion")
+
+        privesc_action = PrivilegeEscalate(hostname=target_hostname, session=0, agent="red_agent_0")
+        privesc_action.duration = 1
+        cyborg_env.step(agent="red_agent_0", action=privesc_action)
+
+        privesc_idx = encode_red_action("PrivilegeEscalate", target_h, 0)
+        new_state = apply_red_action(state, const, 0, privesc_idx, jax.random.PRNGKey(0))
+
+        action_space_after = cyborg_env.environment_controller.agent_interfaces["red_agent_0"].action_space
+        known_after = {
+            hostname_to_idx[cyborg_state.ip_addresses[ip]]
+            for ip, is_known in action_space_after.ip_address.items()
+            if is_known and ip in cyborg_state.ip_addresses and cyborg_state.ip_addresses[ip] in hostname_to_idx
+        }
+        jax_known_after = set(np.where(np.array(new_state.red_discovered_hosts[0]))[0].tolist())
+
+        for linked_h in unseen_linked:
+            assert linked_h in known_after
+            assert linked_h in jax_known_after

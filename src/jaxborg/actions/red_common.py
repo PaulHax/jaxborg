@@ -36,8 +36,7 @@ def exploit_common_preconditions(
     is_scanned = state.red_scanned_hosts[agent_id, target_host]
     target_subnet = const.host_subnet[target_host]
     can_reach = can_reach_subnet(state, const, agent_id, target_subnet)
-    no_session = ~state.red_sessions[agent_id, target_host]
-    return is_active & is_scanned & can_reach & no_session
+    return is_active & is_scanned & can_reach
 
 
 def apply_exploit_success(

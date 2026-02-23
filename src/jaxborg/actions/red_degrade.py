@@ -25,7 +25,10 @@ def apply_degrade(
         state.red_activity_this_step,
     )
 
-    degraded = jnp.maximum(state.host_service_reliability[target_host] - DEGRADE_AMOUNT, 0)
+    current_reliability = state.host_service_reliability[target_host]
+    active_services = state.host_services[target_host]
+    degraded = jnp.maximum(current_reliability - DEGRADE_AMOUNT, 0)
+    degraded = jnp.where(active_services, degraded, current_reliability)
     reliability = jnp.where(
         success,
         state.host_service_reliability.at[target_host].set(degraded),

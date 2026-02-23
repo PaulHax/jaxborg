@@ -259,6 +259,14 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
     for red_idx in range(NUM_RED_AGENTS):
         if red_agent_active[red_idx]:
             red_initial_discovered_hosts[red_idx, red_start_hosts[red_idx]] = True
+    host_info_links = np.zeros((GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=bool)
+    for src_hostname, host in state.hosts.items():
+        if src_hostname not in hostname_to_idx:
+            continue
+        src_idx = hostname_to_idx[src_hostname]
+        for dst_hostname in getattr(host, "info", {}).keys():
+            if dst_hostname in hostname_to_idx:
+                host_info_links[src_idx, hostname_to_idx[dst_hostname]] = True
 
     green_agent_host = np.full(GLOBAL_MAX_HOSTS, -1, dtype=np.int32)
     green_agent_active = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
@@ -298,6 +306,7 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
         red_agent_subnets=jnp.array(red_agent_subnets),
         red_initial_discovered_hosts=jnp.array(red_initial_discovered_hosts),
         red_initial_scanned_hosts=jnp.array(red_initial_scanned_hosts),
+        host_info_links=jnp.array(host_info_links),
         green_agent_host=jnp.array(green_agent_host),
         green_agent_active=jnp.array(green_agent_active),
         num_green_agents=green_count,
@@ -470,6 +479,30 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
     for red_idx in range(NUM_RED_AGENTS):
         if red_agent_active[red_idx]:
             red_initial_discovered_hosts[red_idx, red_start_hosts[red_idx]] = True
+    host_info_links = np.zeros((GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=bool)
+    host_name_to_idx = {name: idx for idx, name in enumerate(host_names)}
+    server0_idx_by_subnet = np.full(NUM_SUBNETS, -1, dtype=np.int32)
+    for sname in SUBNET_NAMES:
+        if sname == "INTERNET":
+            continue
+        sid = SUBNET_IDS[sname]
+        server0_name = f"{CYBORG_SUBNET_SUFFIX[sname]}_server_host_0"
+        if server0_name in host_name_to_idx:
+            server0_idx_by_subnet[sid] = host_name_to_idx[server0_name]
+    for src_name, neighbor_names in _ROUTER_LINKS.items():
+        if src_name == "INTERNET":
+            continue
+        src_sid = SUBNET_IDS[src_name]
+        src_idx = int(server0_idx_by_subnet[src_sid])
+        if src_idx < 0:
+            continue
+        for dst_name in neighbor_names:
+            if dst_name == "INTERNET":
+                continue
+            dst_sid = SUBNET_IDS[dst_name]
+            dst_idx = int(server0_idx_by_subnet[dst_sid])
+            if dst_idx >= 0:
+                host_info_links[src_idx, dst_idx] = True
 
     green_agent_host = np.full(GLOBAL_MAX_HOSTS, -1, dtype=np.int32)
     green_agent_active = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
@@ -504,6 +537,7 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
         red_agent_subnets=jnp.array(red_agent_subnets),
         red_initial_discovered_hosts=jnp.array(red_initial_discovered_hosts),
         red_initial_scanned_hosts=jnp.array(red_initial_scanned_hosts),
+        host_info_links=jnp.array(host_info_links),
         green_agent_host=jnp.array(green_agent_host),
         green_agent_active=jnp.array(green_agent_active),
         num_green_agents=green_count,

@@ -3,7 +3,13 @@
 import time
 from dataclasses import dataclass
 
-from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
+from CybORG.Agents import (
+    EnterpriseGreenAgent,
+    FiniteStateRedAgent,
+    MonitorAgent,
+    SleepAgent,
+    cc4BlueRandomAgent,
+)
 
 from tests.differential.harness import CC4DifferentialHarness
 from tests.differential.state_comparator import _ERROR_FIELDS, format_diffs
@@ -28,33 +34,60 @@ class MismatchReport:
         )
 
 
+BLUE_AGENT_CLASSES = {
+    "sleep": SleepAgent,
+    "monitor": MonitorAgent,
+    "random": cc4BlueRandomAgent,
+}
+
+BLUE_ACTION_SOURCES = {"sleep", "cyborg_policy"}
+
+
 def run_differential_fuzz(
     seeds=range(20),
     max_steps_per_seed=100,
     verbose=False,
+    mismatch_mode: str = "error",
+    blue_agent: str = "sleep",
+    blue_action_source: str = "sleep",
 ) -> MismatchReport | None:
+    if mismatch_mode not in {"error", "all"}:
+        raise ValueError("mismatch_mode must be one of: error, all")
+    if blue_agent not in BLUE_AGENT_CLASSES:
+        raise ValueError(f"blue_agent must be one of: {sorted(BLUE_AGENT_CLASSES)}")
+    if blue_action_source not in BLUE_ACTION_SOURCES:
+        raise ValueError(f"blue_action_source must be one of: {sorted(BLUE_ACTION_SOURCES)}")
+
+    blue_cls = BLUE_AGENT_CLASSES[blue_agent]
+    use_cyborg_blue_policy = blue_action_source == "cyborg_policy"
+
     wall_start = time.time()
     for seed in seeds:
         seed_start = time.time()
         if verbose:
-            print(f"--- Seed {seed} ---")
+            print(f"--- Seed {seed} (blue_agent={blue_agent}, blue_action_source={blue_action_source}) ---")
 
         harness = CC4DifferentialHarness(
             seed=seed,
             max_steps=500,
-            blue_cls=SleepAgent,
+            blue_cls=blue_cls,
             green_cls=EnterpriseGreenAgent,
             red_cls=FiniteStateRedAgent,
             sync_green_rng=True,
+            use_cyborg_blue_policy=use_cyborg_blue_policy,
         )
         harness.reset()
 
         for t in range(max_steps_per_seed):
             result = harness.full_step()
 
-            error_diffs = [d for d in result.diffs if d.field_name in _ERROR_FIELDS]
-            if error_diffs:
-                d = error_diffs[0]
+            if mismatch_mode == "all":
+                candidate_diffs = result.diffs
+            else:
+                candidate_diffs = [d for d in result.diffs if d.field_name in _ERROR_FIELDS]
+
+            if candidate_diffs:
+                d = candidate_diffs[0]
                 return MismatchReport(
                     seed=seed,
                     step=t,

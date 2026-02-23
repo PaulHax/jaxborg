@@ -72,6 +72,23 @@ Primary regression tests for parity bugs must be **explicit differential tests**
 
 Unit tests are allowed as secondary guardrails, but they do **not** replace the required differential regression for parity bugs.
 
+#### Good 4-step TDD loop (example)
+
+Example gap: `seed=0 step=130 host_compromised [host_80] cyborg=1 jax=0` caused by Blue `Remove`.
+
+1. **Reproduce and isolate context**
+   - Re-run the failing seed/step and inspect the exact CybORG action and state preconditions.
+   - In this example: `Remove` was called with `sus_pids` present, but PID was stale (no live process), so CybORG did not clear the red session.
+2. **Write one explicit failing differential test**
+   - Add a subsystem differential test that sets up only the required state and compares CybORG and JAX for that mechanic.
+   - In this example: create a stale suspicious PID case for `Remove` and assert both sides keep the user session.
+3. **Apply minimal production fix**
+   - Change only `src/jaxborg/` logic needed for parity; do not rewrite broad behavior.
+   - In this example: gate JAX `Remove` clearing on stronger, CybORG-consistent preconditions.
+4. **Verify and iterate**
+   - Run the new regression first, then nearby subsystem tests, then rerun fuzzing to get the next first mismatch.
+   - Keep one-gap-at-a-time discipline: reproduce -> test -> fix -> rerun.
+
 ### Precomputed Randoms for Deterministic Testing
 
 CybORG and JAX use independent RNG streams, making direct comparison of random-dependent behavior (green agents, detection rolls) impossible without synchronization. The solution is precomputed random arrays stored in `CC4State`:
@@ -95,8 +112,8 @@ It returns a `MismatchReport` on the first error: seed, step, field name, CybORG
 ### Investigation workflow
 
 1. **Reproduce (TDD red)**: write a failing **explicit differential regression** that runs CybORG and JAX to the failing seed/step and asserts the exact mismatch context.
-   - Prefer `tests/differential/test_parity_gaps.py` for fuzzer-reported seed/step reproductions.
-   - If adding to a subsystem file, keep it differential (pure CybORG + JAX in the same test), not JAX-only.
+   - Prefer the relevant subsystem file and explicit state setup; avoid brittle seed/step replay-only tests.
+   - Keep tests differential (pure CybORG + JAX in the same test), not JAX-only.
    - One gap at a time: stop on first mismatch, add test, fix, rerun.
 2. Place the test in the appropriate file:
    - Red action bugs → `tests/subsystems/test_red_*.py` (exploit, discover, privesc, etc.)

@@ -2,7 +2,9 @@ import numpy as np
 
 from jaxborg.constants import (
     NUM_RED_AGENTS,
+    NUM_SERVICES,
     NUM_SUBNETS,
+    SERVICE_IDS,
 )
 from jaxborg.translate import CC4Mappings
 from tests.differential.harness import StateDiff, StateSnapshot
@@ -11,6 +13,11 @@ _ERROR_FIELDS = {
     "host_compromised",
     "red_privilege",
     "red_sessions",
+    "red_discovered_hosts",
+    "red_scanned_hosts",
+    "host_services",
+    "host_service_reliability",
+    "host_has_malware",
     "host_decoys",
     "ot_service_stopped",
     "blocked_zones",
@@ -19,8 +26,6 @@ _ERROR_FIELDS = {
 }
 
 _WARNING_FIELDS = {
-    "red_discovered_hosts",
-    "red_scanned_hosts",
     "host_activity_detected",
 }
 
@@ -206,8 +211,13 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings) -> list[StateDiff]:
     jax_compromised = np.asarray(jax_state.host_compromised[:n])
     jax_sessions = np.asarray(jax_state.red_sessions[:NUM_RED_AGENTS, :n])
     jax_priv = np.asarray(jax_state.red_privilege[:NUM_RED_AGENTS, :n])
+    jax_discovered = np.asarray(jax_state.red_discovered_hosts[:NUM_RED_AGENTS, :n])
+    jax_scanned = np.asarray(jax_state.red_scanned_hosts[:NUM_RED_AGENTS, :n])
+    jax_services = np.asarray(jax_state.host_services[:n, :NUM_SERVICES])
+    jax_service_reliability = np.asarray(jax_state.host_service_reliability[:n, :NUM_SERVICES])
     jax_decoys = np.asarray(jax_state.host_decoys[:n])
     jax_ot_stopped = np.asarray(jax_state.ot_service_stopped[:n])
+    jax_has_malware = np.asarray(jax_state.host_has_malware[:n])
     jax_blocked = np.asarray(jax_state.blocked_zones)
     jax_phase = int(jax_state.mission_phase)
 
@@ -216,6 +226,30 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings) -> list[StateDiff]:
     cyborg_compromised = np.zeros(n, dtype=np.int32)
     cyborg_sessions = np.zeros((NUM_RED_AGENTS, n), dtype=np.bool_)
     cyborg_priv = np.zeros((NUM_RED_AGENTS, n), dtype=np.int32)
+    cyborg_discovered = np.zeros((NUM_RED_AGENTS, n), dtype=np.bool_)
+    cyborg_scanned = np.zeros((NUM_RED_AGENTS, n), dtype=np.bool_)
+    cyborg_services = np.zeros((n, NUM_SERVICES), dtype=np.bool_)
+    cyborg_service_reliability = np.full((n, NUM_SERVICES), 100, dtype=np.int32)
+    cyborg_has_malware = np.zeros(n, dtype=np.bool_)
+    cyborg_ot_stopped = np.zeros(n, dtype=np.bool_)
+
+    for hostname, host in cyborg_state.hosts.items():
+        if hostname not in mappings.hostname_to_idx:
+            continue
+        hidx = mappings.hostname_to_idx[hostname]
+
+        if any(getattr(f, "name", "") == "cmd.sh" for f in host.files):
+            cyborg_has_malware[hidx] = True
+
+        for svc_name, svc in host.services.items():
+            svc_str = str(svc_name).split(".")[-1] if "." in str(svc_name) else str(svc_name)
+            if svc_str not in SERVICE_IDS:
+                continue
+            sid = SERVICE_IDS[svc_str]
+            cyborg_services[hidx, sid] = bool(svc.active)
+            cyborg_service_reliability[hidx, sid] = int(svc.get_service_reliability())
+            if svc_str == "OTSERVICE" and not bool(svc.active):
+                cyborg_ot_stopped[hidx] = True
 
     for agent_name, sessions in cyborg_state.sessions.items():
         if not agent_name.startswith("red_agent_"):
@@ -231,8 +265,26 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings) -> list[StateDiff]:
             level = 2 if (hasattr(sess, "username") and sess.username in ("root", "SYSTEM")) else 1
             cyborg_priv[red_idx, hidx] = max(cyborg_priv[red_idx, hidx], level)
             cyborg_compromised[hidx] = max(cyborg_compromised[hidx], level)
+            for ip in getattr(sess, "ports", {}).keys():
+                host_from_ip = cyborg_state.ip_addresses.get(ip)
+                if host_from_ip in mappings.hostname_to_idx:
+                    cyborg_scanned[red_idx, mappings.hostname_to_idx[host_from_ip]] = True
 
     cyborg_phase = getattr(cyborg_state, "mission_phase", 0)
+
+    controller = cyborg_env.environment_controller
+    for r in range(NUM_RED_AGENTS):
+        iface = controller.agent_interfaces.get(f"red_agent_{r}")
+        if iface is None:
+            continue
+        aspace = iface.action_space
+
+        for ip, known in getattr(aspace, "ip_address", {}).items():
+            if not known:
+                continue
+            hostname = cyborg_state.ip_addresses.get(ip)
+            if hostname in mappings.hostname_to_idx:
+                cyborg_discovered[r, mappings.hostname_to_idx[hostname]] = True
 
     # Compare with vectorized ops
     if cyborg_phase != jax_phase:
@@ -249,18 +301,46 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings) -> list[StateDiff]:
             diffs.append(StateDiff("red_sessions", cs, js, f"red_agent_{r}"))
 
     for r in range(NUM_RED_AGENTS):
+        if not np.array_equal(cyborg_discovered[r], jax_discovered[r]):
+            cs = set(np.where(cyborg_discovered[r])[0].tolist())
+            js = set(np.where(jax_discovered[r])[0].tolist())
+            diffs.append(StateDiff("red_discovered_hosts", cs, js, f"red_agent_{r}"))
+
+    for r in range(NUM_RED_AGENTS):
+        if not np.array_equal(cyborg_scanned[r], jax_scanned[r]):
+            cs = set(np.where(cyborg_scanned[r])[0].tolist())
+            js = set(np.where(jax_scanned[r])[0].tolist())
+            diffs.append(StateDiff("red_scanned_hosts", cs, js, f"red_agent_{r}"))
+
+    for r in range(NUM_RED_AGENTS):
         priv_mismatch = np.where(cyborg_priv[r] != jax_priv[r])[0]
         for h in priv_mismatch:
             diffs.append(StateDiff("red_privilege", int(cyborg_priv[r, h]), int(jax_priv[r, h]), f"red_{r}_host_{h}"))
+
+    for h in range(n):
+        if not np.array_equal(cyborg_services[h], jax_services[h]):
+            cs = tuple(bool(x) for x in cyborg_services[h].tolist())
+            js = tuple(bool(x) for x in jax_services[h].tolist())
+            diffs.append(StateDiff("host_services", cs, js, f"host_{h}"))
+
+    for h in range(n):
+        if not np.array_equal(cyborg_service_reliability[h], jax_service_reliability[h]):
+            cs = tuple(int(x) for x in cyborg_service_reliability[h].tolist())
+            js = tuple(int(x) for x in jax_service_reliability[h].tolist())
+            diffs.append(StateDiff("host_service_reliability", cs, js, f"host_{h}"))
+
+    malware_mismatch = np.where(cyborg_has_malware != jax_has_malware)[0]
+    for h in malware_mismatch:
+        diffs.append(StateDiff("host_has_malware", bool(cyborg_has_malware[h]), bool(jax_has_malware[h]), f"host_{h}"))
 
     if np.any(jax_decoys):
         for h in range(n):
             if np.any(jax_decoys[h]):
                 diffs.append(StateDiff("host_decoys", None, tuple(bool(d) for d in jax_decoys[h]), f"host_{h}"))
 
-    if np.any(jax_ot_stopped):
-        for h in np.where(jax_ot_stopped)[0]:
-            diffs.append(StateDiff("ot_service_stopped", False, True, f"host_{h}"))
+    ot_stopped_mismatch = np.where(cyborg_ot_stopped != jax_ot_stopped)[0]
+    for h in ot_stopped_mismatch:
+        diffs.append(StateDiff("ot_service_stopped", bool(cyborg_ot_stopped[h]), bool(jax_ot_stopped[h]), f"host_{h}"))
 
     cyborg_blocked = set()
     for to_subnet, from_list in getattr(cyborg_state, "blocks", {}).items():

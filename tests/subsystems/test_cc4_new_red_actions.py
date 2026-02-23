@@ -2,6 +2,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from CybORG import CybORG
+from CybORG.Agents import SleepAgent
+from CybORG.Shared.Session import RedAbstractSession
+from CybORG.Simulator.Actions import DegradeServices
+from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_red_action
 from jaxborg.actions.encoding import (
@@ -26,9 +31,10 @@ from jaxborg.constants import (
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
     MAX_DETECTION_RANDOMS,
+    SERVICE_IDS,
 )
 from jaxborg.state import create_initial_state
-from jaxborg.topology import build_topology
+from jaxborg.topology import build_const_from_cyborg, build_topology
 
 
 @pytest.fixture
@@ -376,3 +382,81 @@ class TestApplyWithdraw:
         jitted = jax.jit(apply_red_action, static_argnums=(2,))
         new_state = jitted(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert not bool(new_state.red_sessions[0, target])
+
+
+class TestDifferentialWithCybORG:
+    @pytest.fixture
+    def cyborg_and_jax(self):
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        cyborg_env = CybORG(scenario_generator=sg, seed=42)
+        const = build_const_from_cyborg(cyborg_env)
+        state = create_initial_state()
+        state = state.replace(host_services=jnp.array(const.initial_services))
+        start_host = int(const.red_start_hosts[0])
+        state = state.replace(red_sessions=state.red_sessions.at[0, start_host].set(True))
+        return cyborg_env, const, state
+
+    def test_degrade_only_changes_active_service_reliability_matches_cyborg(self, cyborg_and_jax):
+        cyborg_env, const, state = cyborg_and_jax
+        cyborg_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cyborg_state.hosts.keys())
+
+        target = None
+        for h in range(const.num_hosts):
+            if not bool(const.host_active[h]) or bool(const.host_is_router[h]):
+                continue
+            if bool(np.any(np.array(const.initial_services[h]))):
+                target = h
+                break
+        assert target is not None, "No host with active services found"
+        target_hostname = sorted_hosts[target]
+
+        red_session = RedAbstractSession(
+            ident=None,
+            hostname=target_hostname,
+            username="root",
+            agent="red_agent_0",
+            parent=0,
+            session_type="shell",
+            pid=None,
+        )
+        cyborg_state.add_session(red_session)
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[0, target].set(True),
+            red_privilege=state.red_privilege.at[0, target].set(COMPROMISE_PRIVILEGED),
+            host_compromised=state.host_compromised.at[target].set(COMPROMISE_PRIVILEGED),
+        )
+
+        active_service_sids = set(np.where(np.array(const.initial_services[target]))[0].tolist())
+        inactive_service_sid = next((sid for sid in SERVICE_IDS.values() if sid not in active_service_sids), None)
+        if inactive_service_sid is None:
+            pytest.skip("No inactive service slot available for this host")
+
+        degrade_action = DegradeServices(hostname=target_hostname, session=0, agent="red_agent_0")
+        degrade_action.duration = 1
+        cyborg_obs = degrade_action.execute(cyborg_state)
+        assert cyborg_obs.success
+
+        action_idx = encode_red_action("DegradeServices", target, 0)
+        new_state = apply_red_action(state, const, 0, action_idx, jax.random.PRNGKey(0))
+
+        cyborg_active_reliability = None
+        active_sid = None
+        for service_name, service in cyborg_state.hosts[target_hostname].services.items():
+            svc_key = str(service_name).split(".")[-1] if "." in str(service_name) else str(service_name)
+            sid = SERVICE_IDS.get(svc_key)
+            if sid is None:
+                continue
+            active_sid = sid
+            cyborg_active_reliability = int(service.get_service_reliability())
+            break
+
+        assert active_sid is not None and cyborg_active_reliability is not None
+        assert int(new_state.host_service_reliability[target, active_sid]) == cyborg_active_reliability
+        assert int(new_state.host_service_reliability[target, inactive_service_sid]) == 100

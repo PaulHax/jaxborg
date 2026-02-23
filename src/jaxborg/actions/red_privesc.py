@@ -38,6 +38,13 @@ def apply_privesc(
         ),
         state.host_compromised,
     )
+    discovered_row = state.red_discovered_hosts[agent_id]
+    discovered_with_info = discovered_row | const.host_info_links[target_host]
+    red_discovered_hosts = jnp.where(
+        success,
+        state.red_discovered_hosts.at[agent_id].set(discovered_with_info),
+        state.red_discovered_hosts,
+    )
 
     activity = jnp.where(
         success,
@@ -48,6 +55,7 @@ def apply_privesc(
     return state.replace(
         red_sessions=red_sessions,
         red_privilege=red_privilege,
+        red_discovered_hosts=red_discovered_hosts,
         host_compromised=host_compromised,
         red_activity_this_step=activity,
     )
