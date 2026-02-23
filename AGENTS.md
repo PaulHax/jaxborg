@@ -2,38 +2,32 @@
 
 Read [CLAUDE.md](CLAUDE.md) for full project context, architecture, commands, and development workflow.
 
-## Automated Parity Loop
+## Parity Loop
 
 The goal: systematically find and fix every CybORG/JAX state divergence until full functional parity is achieved.
 
 ### Quick start
 
 ```bash
-# Default: uses Codex CLI
+# Default
 bash scripts/parity_loop.sh
-
-# Use Claude Code instead
-AGENT=claude bash scripts/parity_loop.sh
 
 # Start small for fast iteration
 FUZZ_SEEDS=5 FUZZ_STEPS=30 bash scripts/parity_loop.sh
 
 # Full stress test
 FUZZ_SEEDS=50 FUZZ_STEPS=200 bash scripts/parity_loop.sh
+
+# Multiple fuzz batches
+MAX_ITERATIONS=5 bash scripts/parity_loop.sh
 ```
 
 ### How it works
 
 1. **Fuzzer** runs `tests/differential/fuzzer.py` across N seeds x M steps
-2. On first mismatch, extracts: seed, step, field, CybORG value, JAX value
-3. **Coding agent** receives the mismatch and follows the "Fixing Differential Gaps" workflow in CLAUDE.md:
-   - Write a failing test in the appropriate test file
-   - Read CybORG source to understand the divergence
-   - Fix the JAX code
-   - Verify all tests pass, lint, commit
-4. Loop back to step 1 with a clean codebase
-
-Each iteration gets a fresh agent context window, avoiding the context exhaustion problem.
+2. On first mismatch, prints: seed, step, field, CybORG value, JAX value, and exits non-zero
+3. You then fix the gap manually (or with Codex/Claude), following the "Fixing Differential Gaps" workflow in `CLAUDE.md`
+4. Rerun the loop
 
 ### Running with Codex CLI directly
 

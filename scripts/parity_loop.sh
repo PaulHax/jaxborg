@@ -1,38 +1,33 @@
 #!/usr/bin/env bash
-# Automated parity loop: fuzzer finds gaps, coding agent fixes them.
+# Differential parity loop (fuzzer only): run batches until mismatch or clean.
 #
 # Usage:
-#   bash scripts/parity_loop.sh              # uses codex by default
-#   AGENT=claude bash scripts/parity_loop.sh # use claude code instead
+#   bash scripts/parity_loop.sh
 #
 # Environment variables:
-#   AGENT           - "codex" (default) or "claude"
-#   MAX_ITERATIONS  - max fix cycles (default: 20)
-#   FUZZ_SEEDS      - number of seeds to fuzz (default: 20)
-#   FUZZ_STEPS      - steps per seed (default: 100)
+#   MAX_ITERATIONS          - max fuzz batches (default: 20)
+#   FUZZ_SEEDS              - number of seeds per batch (default: 20)
+#   FUZZ_STEPS              - steps per seed (default: 100)
+#   FUZZ_MISMATCH_MODE      - "error" (default) or "all"
+#   FUZZ_BLUE_AGENT         - "sleep" (default), "monitor", or "random"
+#   FUZZ_BLUE_ACTION_SOURCE - "sleep" (default) or "cyborg_policy"
+
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-AGENT="${AGENT:-codex}"
 MAX_ITERATIONS="${MAX_ITERATIONS:-20}"
 FUZZ_SEEDS="${FUZZ_SEEDS:-20}"
 FUZZ_STEPS="${FUZZ_STEPS:-100}"
+FUZZ_MISMATCH_MODE="${FUZZ_MISMATCH_MODE:-error}"
+FUZZ_BLUE_AGENT="${FUZZ_BLUE_AGENT:-sleep}"
+FUZZ_BLUE_ACTION_SOURCE="${FUZZ_BLUE_ACTION_SOURCE:-sleep}"
 
-invoke_agent() {
-    local prompt="$1"
-    case "$AGENT" in
-        codex)
-            codex exec --full-auto "$prompt"
-            ;;
-        claude)
-            claude -p "$prompt" --allowedTools "Read,Write,Edit,Grep,Glob,Bash,Task,WebFetch"
-            ;;
-        *)
-            echo "Unknown AGENT=$AGENT (use 'codex' or 'claude')" >&2
-            exit 1
-            ;;
-    esac
-}
+# Persist JAX compilations between loop iterations so repeated uv/python
+# processes avoid recompilation costs.
+export JAX_ENABLE_COMPILATION_CACHE="${JAX_ENABLE_COMPILATION_CACHE:-1}"
+export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-$PWD/.cache/jax}"
+export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS="${JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS:-0}"
+mkdir -p "$JAX_COMPILATION_CACHE_DIR"
 
 for i in $(seq 1 "$MAX_ITERATIONS"); do
     echo ""
@@ -40,10 +35,17 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
     echo "  Parity Loop — Iteration $i / $MAX_ITERATIONS"
     echo "============================================"
 
-    echo "Running fuzzer (seeds=0-$((FUZZ_SEEDS-1)), steps=$FUZZ_STEPS)..."
+    echo "Running fuzzer (seeds=0-$((FUZZ_SEEDS-1)), steps=$FUZZ_STEPS, mismatch_mode=$FUZZ_MISMATCH_MODE, blue_agent=$FUZZ_BLUE_AGENT, blue_action_source=$FUZZ_BLUE_ACTION_SOURCE)..."
     output=$(uv run python -u -c "
 from tests.differential.fuzzer import run_differential_fuzz
-r = run_differential_fuzz(seeds=range($FUZZ_SEEDS), max_steps_per_seed=$FUZZ_STEPS, verbose=True)
+r = run_differential_fuzz(
+    seeds=range($FUZZ_SEEDS),
+    max_steps_per_seed=$FUZZ_STEPS,
+    verbose=True,
+    mismatch_mode='$FUZZ_MISMATCH_MODE',
+    blue_agent='$FUZZ_BLUE_AGENT',
+    blue_action_source='$FUZZ_BLUE_ACTION_SOURCE',
+)
 if r:
     print(f'MISMATCH|{r.seed}|{r.step}|{r.field_name}|{r.host_or_agent}|{r.cyborg_value}|{r.jax_value}')
     print(r.all_diffs_str)
@@ -53,41 +55,25 @@ else:
 
     if echo "$output" | grep -q "^CLEAN$"; then
         echo ""
-        echo "No mismatches found across $FUZZ_SEEDS seeds x $FUZZ_STEPS steps."
-        echo "Parity achieved after $i iterations!"
+        echo "No monitored mismatches found across $FUZZ_SEEDS seeds x $FUZZ_STEPS steps (mode=$FUZZ_MISMATCH_MODE)."
+        echo "Current monitored parity target reached after $i iterations."
         exit 0
     fi
 
     mismatch=$(echo "$output" | grep "^MISMATCH|" | head -1)
     diffs=$(echo "$output" | grep -v "^MISMATCH|" | grep -v "^---" | grep -v "^  Seed" | grep -v "^Total:" | grep -v "^Running" || true)
-
     IFS='|' read -r _ seed step field host cyborg_val jax_val <<< "$mismatch"
+
     echo ""
     echo "FOUND GAP: seed=$seed step=$step $field [$host] cyborg=$cyborg_val jax=$jax_val"
-    echo "$diffs"
-
-    prompt="The differential fuzzer found a CybORG/JAX state divergence.
-
-Mismatch at seed=$seed, step=$step: $field [$host] cyborg=$cyborg_val jax=$jax_val
-
-All diffs at this step:
-$diffs
-
-Follow the 'Fixing Differential Gaps' workflow in CLAUDE.md:
-1. Write a failing regression test that reproduces this mismatch at the specific seed/step. Place it in the appropriate test file based on the subsystem involved (see CLAUDE.md for guidance), NOT always in test_fuzz_gaps.py.
-2. Read the CybORG source at .venv/lib/python3.11/site-packages/CybORG/ to understand the root cause.
-3. Fix the JAX code in src/jaxborg/ to match CybORG's behavior.
-4. Verify: uv run pytest tests/ -v --ignore=tests/test_env_smoke.py --ignore=tests/test_training_parity.py -x
-5. Lint: uv run ruff check --fix . && uv run ruff format .
-6. Commit with a message describing the gap and fix."
-
+    if [[ -n "$diffs" ]]; then
+        echo "$diffs"
+    fi
     echo ""
-    echo "Invoking $AGENT..."
-    invoke_agent "$prompt"
-
-    echo ""
-    echo "Agent finished iteration $i. Continuing to next fuzzer run..."
+    echo "Stopping on first mismatch. Add an explicit differential regression, fix, then rerun."
+    exit 1
 done
 
 echo ""
-echo "Hit max iterations ($MAX_ITERATIONS). Run again or increase MAX_ITERATIONS."
+echo "Completed $MAX_ITERATIONS iterations without CLEAN or MISMATCH sentinel output."
+exit 1
