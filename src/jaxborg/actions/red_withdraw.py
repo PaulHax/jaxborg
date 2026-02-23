@@ -27,14 +27,17 @@ def apply_withdraw(
         state.red_privilege,
     )
 
+    # Only clear host_compromised if no other agent still has privilege on this host
+    remaining_max = jnp.max(red_privilege[:, target_host])
     host_compromised = jnp.where(
         success,
-        state.host_compromised.at[target_host].set(COMPROMISE_NONE),
+        state.host_compromised.at[target_host].set(remaining_max),
         state.host_compromised,
     )
 
+    any_remaining_session = jnp.any(red_sessions[:, target_host])
     host_has_malware = jnp.where(
-        success,
+        success & ~any_remaining_session,
         state.host_has_malware.at[target_host].set(False),
         state.host_has_malware,
     )

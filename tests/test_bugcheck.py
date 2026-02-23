@@ -399,11 +399,8 @@ class TestImpactRequiresOperational:
 class TestExploitPrivilegeLevels:
     """CC2 BUG 13: Certain exploits grant root directly."""
 
-    @pytest.mark.xfail(
-        reason="CC4 haraka exploit is decoy-detection-only stub (potential parity bug)",
-        strict=True,
-    )
-    def test_haraka_gives_privileged(self):
+    def test_haraka_does_not_grant_access(self):
+        """In CC4, SMTP processes are always patched (HARAKA_2_8_9) so HarakaRCE never succeeds."""
         const = build_const_from_cyborg(_make_cyborg())
         state = _make_jax_state(const)
 
@@ -430,9 +427,9 @@ class TestExploitPrivilegeLevels:
         key = jax.random.PRNGKey(42)
         state = apply_red_action(state, const, 0, action, key)
 
-        assert int(state.red_privilege[0, target]) == COMPROMISE_PRIVILEGED, (
-            f"HarakaRCE should give PRIVILEGED on host {target} (CC2 BUG 13). "
-            "CC4 haraka only handles decoy detection — does not call apply_exploit_success."
+        assert int(state.red_privilege[0, target]) == COMPROMISE_NONE, (
+            f"HarakaRCE should not grant access on host {target} — "
+            "CC4 SMTP is always patched (prob_vuln_proc_occurs=1.0)"
         )
 
 

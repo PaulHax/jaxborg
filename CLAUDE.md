@@ -55,6 +55,16 @@ Every test must compare JAX output against CybORG. Pattern:
 
 Test infrastructure lives in `tests/differential/` (harness, action translator, state comparator).
 
+### Precomputed Randoms for Deterministic Testing
+
+CybORG and JAX use independent RNG streams, making direct comparison of random-dependent behavior (green agents, detection rolls) impossible without synchronization. The solution is precomputed random arrays stored in `CC4State`:
+
+- **Green agents**: `green_randoms` `(MAX_STEPS, GLOBAL_MAX_HOSTS, 7)` float array + `use_green_randoms` bool. The 7 fields encode action choice, service selection, reliability roll, FP roll, phishing roll, dest host, and access FP roll as `[0,1)` uniforms. `sample_green_random()` in `actions/rng.py` uses `jax.lax.cond` to read from the array or fall back to JAX RNG. `tests/differential/green_recorder.py` wraps CybORG's `np_random` to capture values, then the harness injects them into JAX state via `sync_green_rng=True`.
+- **Detection**: `detection_randoms` flat sequence + `detection_random_index` counter. `sample_detection_random()` in `actions/rng.py`.
+
+To run green parity tests: `uv run pytest tests/test_green_parity.py -v` (requires CybORG).
+To run green unit tests (no CybORG): `uv run pytest tests/test_green_unit.py -v`.
+
 ## Linting
 
 Run `uv run ruff check --fix . && uv run ruff format .` before committing.

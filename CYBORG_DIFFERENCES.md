@@ -63,21 +63,12 @@ out-of-subnet hosts would never reach state U through normal gameplay.
 - JAX: `fsm_red.py` — no subnet check on U state
 - CybORG: `FiniteStateRedAgent.py` — `if subnet not in self.allowed_subnets: state = 'F'`
 
-## Withdraw: Unconditional host_compromised Clear
+## ~~Withdraw: Unconditional host_compromised Clear~~ RESOLVED
 
-`apply_withdraw` sets `host_compromised[target_host] = COMPROMISE_NONE` unconditionally
-when a red agent withdraws. If multiple red agents have sessions on the same host, one
-agent withdrawing clears the global compromised flag even though another agent still has
-access.
-
-In CybORG, `host_compromised` is implicit from active sessions/processes, so withdrawing
-one agent doesn't affect the other's presence.
-
-In CC4 practice, multiple red agents sharing the same host is rare since they start in
-different zones and operate on separate subnets.
-
-- JAX: `red_withdraw.py` — unconditionally sets `COMPROMISE_NONE`
-- CybORG: compromise derived from session state, not a single flag
+Now matches CybORG: `apply_withdraw` computes the max remaining privilege across all red
+agents after clearing the withdrawing agent's session. `host_compromised` is set to that
+max (which is `COMPROMISE_NONE` only if no other agent has privilege). `host_has_malware`
+is only cleared if no other agent has a session on the host.
 
 ## Observation Layout: Fixed vs Variable Body Size
 
