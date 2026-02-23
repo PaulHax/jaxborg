@@ -10,15 +10,8 @@ from jaxmarl.environments.spaces import Box, Discrete
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.agents.fsm_red import (
-    FSM_ACT_DISCOVER_DECEPTION,
-    FSM_KD,
-    FSM_R,
-    FSM_RD,
-    FSM_U,
-    FSM_UD,
-    determine_fsm_success,
     fsm_red_get_action_and_info,
-    fsm_red_update_state,
+    fsm_red_post_step_update,
 )
 from jaxborg.constants import BLUE_OBS_SIZE, NUM_BLUE_AGENTS, NUM_RED_AGENTS
 from jaxborg.env import CC4Env, CC4EnvState
@@ -104,25 +97,14 @@ class FsmRedCC4Env(MultiAgentEnv):
 
         obs, env_state, rewards, dones, info = self._env.step_env(key, env_state, all_actions)
 
-        state_after = env_state.state
-        fsm_states = state_after.fsm_host_states
-
-        for r in range(NUM_RED_AGENTS):
-            success = determine_fsm_success(state_before, state_after, r, target_hosts[r], fsm_actions[r])
-            skip = ~eligible_flags[r] | (fsm_actions[r] == FSM_ACT_DISCOVER_DECEPTION)
-            updated = fsm_red_update_state(fsm_states, env_state.const, r, target_hosts[r], fsm_actions[r], success)
-            fsm_states = jnp.where(skip, fsm_states, updated)
-
-        for r in range(NUM_RED_AGENTS):
-            agent_fsm = fsm_states[r]
-            has_session = state_after.red_sessions[r]
-            was_compromised = (
-                (agent_fsm == FSM_U) | (agent_fsm == FSM_UD) | (agent_fsm == FSM_R) | (agent_fsm == FSM_RD)
-            )
-            lost_session = was_compromised & ~has_session
-            fsm_states = fsm_states.at[r].set(jnp.where(lost_session, FSM_KD, agent_fsm))
-
-        new_state = state_after.replace(fsm_host_states=fsm_states)
+        new_state = fsm_red_post_step_update(
+            state_before,
+            env_state.state,
+            env_state.const,
+            target_hosts,
+            fsm_actions,
+            eligible_flags,
+        )
         env_state = CC4EnvState(state=new_state, const=env_state.const)
 
         blue_obs = {a: obs[a] for a in self.agents}

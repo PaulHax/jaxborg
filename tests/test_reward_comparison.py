@@ -5,10 +5,6 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from tests.conftest import cyborg_required
-
-pytestmark = cyborg_required
-
 
 def _run_cyborg_sleep_episode(env, steps=500):
     from statistics import mean

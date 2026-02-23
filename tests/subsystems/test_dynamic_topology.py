@@ -2,6 +2,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from CybORG import CybORG
+from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
+from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_red_action
 from jaxborg.actions.encoding import encode_red_action
@@ -16,17 +19,6 @@ from jaxborg.constants import (
 )
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_topology
-
-try:
-    from CybORG import CybORG
-    from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    HAS_CYBORG = True
-except ImportError:
-    HAS_CYBORG = False
-
-cyborg_required = pytest.mark.skipif(not HAS_CYBORG, reason="CybORG not installed")
 
 SEEDS = [1, 7, 42, 100, 256, 999, 12345, 54321]
 
@@ -247,7 +239,6 @@ class TestActionHandlersRespectHostActive:
                 assert bool(const.host_active[h])
 
 
-@cyborg_required
 class TestDifferentialHostCounts:
     @pytest.fixture
     def cyborg_env(self):

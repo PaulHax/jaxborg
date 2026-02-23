@@ -5,10 +5,6 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from tests.conftest import cyborg_required
-
-pytestmark = cyborg_required
-
 
 @pytest.fixture
 def cyborg_sleep_env():

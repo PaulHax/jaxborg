@@ -2,6 +2,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from CybORG import CybORG
+from CybORG.Agents import SleepAgent
+from CybORG.Shared.Enums import ProcessName
+from CybORG.Shared.Session import RedAbstractSession
+from CybORG.Simulator.Actions import Impact
+from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_red_action
 from jaxborg.actions.encoding import (
@@ -23,20 +29,6 @@ from jaxborg.constants import (
 )
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_topology
-
-try:
-    from CybORG import CybORG
-    from CybORG.Agents import SleepAgent
-    from CybORG.Shared.Enums import ProcessName
-    from CybORG.Shared.Session import RedAbstractSession
-    from CybORG.Simulator.Actions import Impact
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    HAS_CYBORG = True
-except ImportError:
-    HAS_CYBORG = False
-
-cyborg_required = pytest.mark.skipif(not HAS_CYBORG, reason="CybORG not installed")
 
 SSH_SVC = SERVICE_IDS["SSHD"]
 OT_SVC = SERVICE_IDS["OTSERVICE"]
@@ -281,7 +273,6 @@ class TestImpactChain:
         assert int(state.red_privilege[0, target]) == COMPROMISE_PRIVILEGED
 
 
-@cyborg_required
 class TestDifferentialWithCybORG:
     @pytest.fixture
     def cyborg_env(self):

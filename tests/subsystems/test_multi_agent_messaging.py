@@ -2,6 +2,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from CybORG import CybORG
+from CybORG.Agents import SleepAgent
+from CybORG.Agents.Wrappers.BlueFlatWrapper import BlueFlatWrapper
+from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.constants import (
     MESSAGE_LENGTH,
@@ -10,18 +14,6 @@ from jaxborg.constants import (
 from jaxborg.observations import SUBNET_BLOCK_SIZE, get_blue_obs
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg, build_topology
-
-try:
-    from CybORG import CybORG
-    from CybORG.Agents import SleepAgent
-    from CybORG.Agents.Wrappers.BlueFlatWrapper import BlueFlatWrapper
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    HAS_CYBORG = True
-except ImportError:
-    HAS_CYBORG = False
-
-cyborg_required = pytest.mark.skipif(not HAS_CYBORG, reason="CybORG not installed")
 
 OBS_SIZE = 210
 NUM_MESSAGES = 4
@@ -222,7 +214,6 @@ class TestMessageJIT:
             )
 
 
-@cyborg_required
 class TestDifferentialMessages:
     @pytest.fixture
     def cyborg_env(self):
@@ -358,7 +349,6 @@ class TestDifferentialMessages:
             )
 
 
-@cyborg_required
 class TestMessageDifferential:
     @pytest.fixture
     def cyborg_env(self):

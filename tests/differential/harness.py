@@ -7,10 +7,19 @@ from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
-from jaxborg.actions.encoding import BLUE_SLEEP, RED_SLEEP
+from jaxborg.actions.encoding import (
+    BLUE_SLEEP,
+    RED_SLEEP,
+)
 from jaxborg.actions.green import apply_green_agents
-from jaxborg.agents.fsm_red import fsm_red_init_states
-from jaxborg.constants import NUM_BLUE_AGENTS, NUM_RED_AGENTS
+from jaxborg.agents.fsm_red import (
+    fsm_red_get_action_and_info,
+    fsm_red_init_states,
+    fsm_red_post_step_update,
+)
+from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS
+from jaxborg.reassignment import reassign_cross_subnet_sessions
+from jaxborg.rewards import advance_mission_phase
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
 from jaxborg.translate import (
@@ -57,6 +66,12 @@ class TestResult:
     error_diffs: int = 0
 
 
+@jax.jit
+def _jit_green_and_reassign(state, const, key):
+    state = apply_green_agents(state, const, key)
+    return reassign_cross_subnet_sessions(state, const)
+
+
 class CC4DifferentialHarness:
     def __init__(
         self,
@@ -83,6 +98,7 @@ class CC4DifferentialHarness:
         self.mappings = None
         self.rng_key = None
         self.green_recorder = None
+        self._red_pending_jax = [None] * NUM_RED_AGENTS
 
     def reset(self):
         sg = EnterpriseScenarioGenerator(
@@ -135,6 +151,7 @@ class CC4DifferentialHarness:
         )
 
         self.rng_key = jax.random.PRNGKey(self.seed)
+        self._red_pending_jax = [None] * NUM_RED_AGENTS
 
         if self.sync_green_rng:
             from tests.differential.green_recorder import GreenRecorder
@@ -225,44 +242,103 @@ class CC4DifferentialHarness:
 
         return StepResult(step=int(self.jax_state.time), diffs=diffs)
 
-    def full_step(self, red_actions=None, blue_actions=None) -> StepResult:
-        """Single CybORG step processing all agents at once. Required for green RNG sync."""
-        self.rng_key, key_green, *subkeys = jax.random.split(self.rng_key, NUM_RED_AGENTS + 2)
+    def full_step(self, blue_actions=None) -> StepResult:
+        """E2E step mirroring FsmRedCC4Env.step_env(): FSM red + green + blue + reassign + FSM update."""
+        self.rng_key, key_green, key_red, *subkeys = jax.random.split(self.rng_key, NUM_RED_AGENTS + 3)
+        red_keys = jax.random.split(key_red, NUM_RED_AGENTS)
 
-        if red_actions is None:
-            red_actions = {r: RED_SLEEP for r in range(NUM_RED_AGENTS)}
         if blue_actions is None:
             blue_actions = {b: BLUE_SLEEP for b in range(NUM_BLUE_AGENTS)}
 
+        use_fsm = self.red_cls is FiniteStateRedAgent
+
+        # --- Mirror step_env: advance phase + clear per-step fields ---
+        self.jax_state = advance_mission_phase(self.jax_state, self.jax_const)
+        self.jax_state = self.jax_state.replace(
+            red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
+            green_lwf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
+            green_asf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
+            host_activity_detected=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
+        )
+
+        state_before = self.jax_state
+
+        # --- Red action selection ---
+        red_actions = {}
+        target_hosts = []
+        fsm_actions = []
+        eligible_flags = []
+        for r in range(NUM_RED_AGENTS):
+            if use_fsm:
+                action, host, fsm_act, eligible = fsm_red_get_action_and_info(
+                    self.jax_state, self.jax_const, r, red_keys[r]
+                )
+                red_actions[r] = int(action)
+                target_hosts.append(host)
+                fsm_actions.append(fsm_act)
+                eligible_flags.append(eligible)
+            else:
+                red_actions[r] = RED_SLEEP
+                target_hosts.append(jnp.int32(0))
+                fsm_actions.append(jnp.int32(0))
+                eligible_flags.append(jnp.bool_(False))
+
+        # --- CybORG side ---
         cyborg_actions = {}
         for r, action_idx in red_actions.items():
             cyborg_actions[f"red_agent_{r}"] = jax_red_to_cyborg(action_idx, r, self.mappings)
         for b, action_idx in blue_actions.items():
             cyborg_actions[f"blue_agent_{b}"] = jax_blue_to_cyborg(action_idx, b, self.mappings)
 
-        self.cyborg_env.environment_controller.step(cyborg_actions)
+        controller = self.cyborg_env.environment_controller
 
+        for r, action_idx in red_actions.items():
+            aip = controller.actions_in_progress.get(f"red_agent_{r}")
+            if aip is None and action_idx != RED_SLEEP:
+                self._red_pending_jax[r] = (action_idx, subkeys[r])
+
+        controller.step(cyborg_actions)
+
+        # --- Green RNG sync ---
         if self.green_recorder:
             step_fields = self.green_recorder.extract_step(int(self.jax_state.time))
             green_randoms = self.jax_state.green_randoms.at[self.jax_state.time].set(jnp.array(step_fields))
             self.jax_state = self.jax_state.replace(green_randoms=green_randoms)
 
-        for r, action_idx in red_actions.items():
-            self.jax_state = apply_red_action(self.jax_state, self.jax_const, r, action_idx, subkeys[r])
+        # --- JAX red actions (duration-aware) ---
+        for r in range(NUM_RED_AGENTS):
+            aip = controller.actions_in_progress.get(f"red_agent_{r}")
+            if aip is None and self._red_pending_jax[r] is not None:
+                action_idx, key = self._red_pending_jax[r]
+                self.jax_state = apply_red_action(self.jax_state, self.jax_const, r, action_idx, key)
+                self._red_pending_jax[r] = None
+
+        # --- JAX blue actions ---
         for b, action_idx in blue_actions.items():
-            self.jax_state = apply_blue_action(self.jax_state, self.jax_const, b, action_idx)
+            if action_idx != BLUE_SLEEP:
+                self.jax_state = apply_blue_action(self.jax_state, self.jax_const, b, action_idx)
 
-        self.jax_state = apply_green_agents(self.jax_state, self.jax_const, key_green)
+        # --- JAX green + reassign (JIT'd) ---
+        self.jax_state = _jit_green_and_reassign(self.jax_state, self.jax_const, key_green)
 
-        from tests.differential.state_comparator import (
-            compare_snapshots,
-            extract_cyborg_snapshot,
-            extract_jax_snapshot,
-        )
+        # --- FSM state updates (shared with FsmRedCC4Env) ---
+        if use_fsm:
+            self.jax_state = fsm_red_post_step_update(
+                state_before,
+                self.jax_state,
+                self.jax_const,
+                target_hosts,
+                fsm_actions,
+                eligible_flags,
+            )
 
-        cyborg_snap = extract_cyborg_snapshot(self.cyborg_env, self.mappings)
-        jax_snap = extract_jax_snapshot(self.jax_state, self.jax_const, self.mappings)
-        diffs = compare_snapshots(cyborg_snap, jax_snap)
+        # --- Time increment ---
+        self.jax_state = self.jax_state.replace(time=self.jax_state.time + 1)
+
+        # --- Compare ---
+        from tests.differential.state_comparator import compare_fast
+
+        diffs = compare_fast(self.cyborg_env, self.jax_state, self.jax_const, self.mappings)
 
         return StepResult(step=int(self.jax_state.time), diffs=diffs)
 

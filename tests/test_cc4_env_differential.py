@@ -1,7 +1,3 @@
-from tests.conftest import cyborg_required
-
-
-@cyborg_required
 class TestCC4EnvDifferential:
     """Differential tests comparing JAX subsystems against CybORG."""
 

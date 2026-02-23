@@ -2,6 +2,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from CybORG import CybORG
+from CybORG.Agents import SleepAgent
+from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action
 from jaxborg.actions.blue_traffic import apply_allow_traffic, apply_block_traffic
@@ -16,17 +19,6 @@ from jaxborg.actions.encoding import (
 from jaxborg.constants import NUM_SUBNETS, SUBNET_IDS
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
-
-try:
-    from CybORG import CybORG
-    from CybORG.Agents import SleepAgent
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    HAS_CYBORG = True
-except ImportError:
-    HAS_CYBORG = False
-
-cyborg_required = pytest.mark.skipif(not HAS_CYBORG, reason="CybORG not installed")
 
 
 def _make_cyborg_env():
@@ -154,7 +146,6 @@ class TestTrafficViaDispatch:
         assert not bool(new_state.blocked_zones[DST, SRC])
 
 
-@cyborg_required
 class TestDifferentialWithCybORG:
     @pytest.fixture
     def cyborg_env(self):

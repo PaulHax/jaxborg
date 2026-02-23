@@ -1,6 +1,9 @@
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from CybORG import CybORG
+from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
+from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
@@ -19,17 +22,6 @@ from jaxborg.topology import (
     _subnet_nacl_adjacency,
     build_topology,
 )
-
-try:
-    from CybORG import CybORG
-    from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    HAS_CYBORG = True
-except ImportError:
-    HAS_CYBORG = False
-
-cyborg_required = pytest.mark.skipif(not HAS_CYBORG, reason="CybORG not installed")
 
 
 @pytest.fixture
@@ -237,7 +229,6 @@ class TestPureToplogy:
             np.testing.assert_array_equal(pairs[p], pairs[p].T)
 
 
-@cyborg_required
 class TestDifferentialWithCybORG:
     def test_host_count_matches(self, cyborg_env):
         from jaxborg.topology import build_const_from_cyborg

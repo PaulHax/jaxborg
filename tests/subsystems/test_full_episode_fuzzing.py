@@ -1,6 +1,11 @@
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from CybORG import CybORG
+from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
+from CybORG.Agents.Wrappers.BlueFlatWrapper import BlueFlatWrapper
+from CybORG.Shared.BlueRewardMachine import BlueRewardMachine
+from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
@@ -10,19 +15,6 @@ from jaxborg.constants import (
 from jaxborg.observations import get_blue_obs
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
-
-try:
-    from CybORG import CybORG
-    from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
-    from CybORG.Agents.Wrappers.BlueFlatWrapper import BlueFlatWrapper
-    from CybORG.Shared.BlueRewardMachine import BlueRewardMachine
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    HAS_CYBORG = True
-except ImportError:
-    HAS_CYBORG = False
-
-cyborg_required = pytest.mark.skipif(not HAS_CYBORG, reason="CybORG not installed")
 
 OBS_SIZE = 210
 
@@ -146,7 +138,6 @@ def _check_obs_after_sleep_steps(seed, num_sleep_steps=5):
     return mismatches
 
 
-@cyborg_required
 class TestInitialObsFuzzing:
     @pytest.mark.parametrize("seed", FUZZ_SEEDS)
     def test_initial_obs_parity(self, seed):
@@ -154,7 +145,6 @@ class TestInitialObsFuzzing:
         assert len(mismatches) == 0, "\n".join(mismatches)
 
 
-@cyborg_required
 class TestTopologyFuzzing:
     @pytest.mark.parametrize("seed", FUZZ_SEEDS)
     def test_topology_consistency(self, seed):
@@ -162,7 +152,6 @@ class TestTopologyFuzzing:
         assert len(mismatches) == 0, "\n".join(mismatches)
 
 
-@cyborg_required
 class TestRewardTableFuzzing:
     @pytest.mark.parametrize("seed", FUZZ_SEEDS)
     def test_reward_tables_match(self, seed):
@@ -170,7 +159,6 @@ class TestRewardTableFuzzing:
         assert len(mismatches) == 0, "\n".join(mismatches)
 
 
-@cyborg_required
 class TestSleepStepFuzzing:
     @pytest.mark.parametrize("seed", list(range(10)))
     def test_obs_stable_after_sleep(self, seed):

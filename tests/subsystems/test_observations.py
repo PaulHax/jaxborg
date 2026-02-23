@@ -2,6 +2,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from CybORG import CybORG
+from CybORG.Agents import SleepAgent
+from CybORG.Agents.Wrappers.BlueFlatWrapper import BlueFlatWrapper
+from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
@@ -14,18 +18,6 @@ from jaxborg.constants import (
 from jaxborg.observations import JAX_ID_TO_CYBORG_POS, get_blue_obs
 from jaxborg.state import create_initial_state
 from jaxborg.topology import BLUE_AGENT_SUBNETS, build_const_from_cyborg, build_topology
-
-try:
-    from CybORG import CybORG
-    from CybORG.Agents import SleepAgent
-    from CybORG.Agents.Wrappers.BlueFlatWrapper import BlueFlatWrapper
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    HAS_CYBORG = True
-except ImportError:
-    HAS_CYBORG = False
-
-cyborg_required = pytest.mark.skipif(not HAS_CYBORG, reason="CybORG not installed")
 
 OBS_SIZE = 210
 NUM_MESSAGES = 4
@@ -252,7 +244,6 @@ class TestBlueObsJIT:
             assert obs.shape == (OBS_SIZE,), f"agent {agent_id}: JIT shape mismatch"
 
 
-@cyborg_required
 class TestDifferentialWithCybORG:
     @pytest.fixture
     def cyborg_env(self):
@@ -402,7 +393,6 @@ class TestDifferentialWithCybORG:
                 )
 
 
-@cyborg_required
 class TestBlueObsDifferential:
     @pytest.fixture
     def cyborg_env(self):

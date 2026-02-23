@@ -2,22 +2,14 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from CybORG import CybORG
+from CybORG.Agents import SleepAgent
+from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.constants import MISSION_PHASES
 from jaxborg.rewards import advance_mission_phase
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_topology
-
-try:
-    from CybORG import CybORG
-    from CybORG.Agents import SleepAgent
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    HAS_CYBORG = True
-except ImportError:
-    HAS_CYBORG = False
-
-cyborg_required = pytest.mark.skipif(not HAS_CYBORG, reason="CybORG not installed")
 
 
 @pytest.fixture
@@ -82,7 +74,6 @@ class TestAdvanceMissionPhase:
         assert int(result.mission_phase) == 1
 
 
-@cyborg_required
 class TestPhaseTransitionsMatchCybORG:
     @pytest.fixture
     def cyborg_env(self):
@@ -133,7 +124,6 @@ class TestPhaseTransitionsMatchCybORG:
             assert jax_phase == cyborg_phase, f"step={t}: JAX phase={jax_phase} CybORG phase={cyborg_phase}"
 
 
-@cyborg_required
 class TestPhaseDifferential:
     @pytest.fixture
     def cyborg_env(self):

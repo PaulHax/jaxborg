@@ -1,6 +1,10 @@
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from CybORG import CybORG
+from CybORG.Agents import SleepAgent
+from CybORG.Shared.BlueRewardMachine import BlueRewardMachine
+from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
@@ -11,18 +15,6 @@ from jaxborg.constants import (
 from jaxborg.rewards import ASF, LWF, RIA, compute_rewards
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_topology
-
-try:
-    from CybORG import CybORG
-    from CybORG.Agents import SleepAgent
-    from CybORG.Shared.BlueRewardMachine import BlueRewardMachine
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    HAS_CYBORG = True
-except ImportError:
-    HAS_CYBORG = False
-
-cyborg_required = pytest.mark.skipif(not HAS_CYBORG, reason="CybORG not installed")
 
 
 @pytest.fixture
@@ -72,7 +64,6 @@ class TestPhaseRewardsPopulated:
         assert pr[0, inet, RIA] == -1
 
 
-@cyborg_required
 class TestPhaseRewardsMatchCybORG:
     @pytest.fixture
     def cyborg_env(self):
@@ -238,7 +229,6 @@ class TestComputeRewards:
         assert float(reward) == 0.0
 
 
-@cyborg_required
 class TestRewardsDifferential:
     @pytest.fixture
     def cyborg_env(self):

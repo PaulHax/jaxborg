@@ -2,6 +2,16 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from CybORG import CybORG
+from CybORG.Agents import SleepAgent
+from CybORG.Simulator.Actions import DiscoverRemoteSystems, PrivilegeEscalate
+from CybORG.Simulator.Actions.AbstractActions.DiscoverNetworkServices import (
+    AggressiveServiceDiscovery,
+)
+from CybORG.Simulator.Actions.AbstractActions.ExploitRemoteService import (
+    ExploitRemoteService,
+)
+from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_red_action
 from jaxborg.actions.encoding import (
@@ -24,24 +34,6 @@ from jaxborg.constants import (
 )
 from jaxborg.state import create_initial_state
 from jaxborg.topology import CYBORG_SUFFIX_TO_ID, build_topology
-
-try:
-    from CybORG import CybORG
-    from CybORG.Agents import SleepAgent
-    from CybORG.Simulator.Actions import DiscoverRemoteSystems, PrivilegeEscalate
-    from CybORG.Simulator.Actions.AbstractActions.DiscoverNetworkServices import (
-        AggressiveServiceDiscovery,
-    )
-    from CybORG.Simulator.Actions.AbstractActions.ExploitRemoteService import (
-        ExploitRemoteService,
-    )
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    HAS_CYBORG = True
-except ImportError:
-    HAS_CYBORG = False
-
-cyborg_required = pytest.mark.skipif(not HAS_CYBORG, reason="CybORG not installed")
 
 SSH_SVC = SERVICE_IDS["SSHD"]
 
@@ -239,7 +231,6 @@ class TestPrivescChain:
         assert int(state.red_activity_this_step[target]) == ACTIVITY_EXPLOIT
 
 
-@cyborg_required
 class TestDifferentialWithCybORG:
     @pytest.fixture
     def cyborg_env(self):

@@ -57,6 +57,14 @@ agents after clearing the withdrawing agent's session. `host_compromised` is set
 max (which is `COMPROMISE_NONE` only if no other agent has privilege). `host_has_malware`
 is only cleared if no other agent has a session on the host.
 
+## ~~Session Reassignment After Green Phishing~~ RESOLVED
+
+Now matches CybORG: `reassign_cross_subnet_sessions()` in `reassignment.py` transfers red
+sessions to the agent that owns the host's subnet. CybORG's
+`different_subnet_agent_reassignment()` does this after every step — when green phishing
+creates a session on a host outside the originating red agent's allowed subnets, the session
+is transferred to the correct subnet owner. The harness calls this after green actions.
+
 ## Observation Layout: Fixed vs Variable Body Size
 
 CybORG's `BlueFlatWrapper` builds observations with a variable-length body depending on how
@@ -104,3 +112,29 @@ To make red agents genuinely trainable for self-play, additional work is needed:
 
 - JAX: `env.py` — red agents in `self.agents`, receive actions from caller
 - CybORG: `EnterpriseScenarioGenerator` — red always `FiniteStateRedAgent`, not trainable
+
+## Action Duration System
+
+CybORG actions have a `duration` field (number of steps to execute). When an action with
+duration > 1 is submitted, CybORG queues it — the agent sleeps for `duration - 1` steps,
+then the action executes. During the wait, new actions for that agent are ignored.
+
+| Action | Duration |
+|--------|----------|
+| Sleep, DiscoverRemoteSystems | 1 |
+| PrivilegeEscalate, Impact, DegradeServices, Analyse, DiscoverDeception, DeployDecoy | 2 |
+| DiscoverNetworkServices, Remove | 3 |
+| ExploitRemoteService | 4 |
+| Restore | 5 |
+
+JAX `CC4Env.step_env()` executes all actions immediately (no duration tracking). The
+**differential test harness** handles duration by reading CybORG's `actions_in_progress`
+after each step and only applying JAX actions when CybORG actually executes them. This
+keeps state comparison in sync without requiring JAX-side duration logic.
+
+For standalone JAX training (without CybORG), duration is irrelevant since both sides of
+the RL loop (env + policy) see the same immediate-execution semantics.
+
+- CybORG: `SimulationController.step()` — `remaining_ticks` / `actions_in_progress`
+- JAX: `env.py` `step_env()` — immediate execution
+- Harness: `tests/differential/harness.py` `full_step()` — syncs via `actions_in_progress`

@@ -1,21 +1,10 @@
 """Differential tests comparing JAX green agents against CybORG with precomputed randoms."""
 
 import jax.numpy as jnp
-import pytest
 
 from jaxborg.constants import GLOBAL_MAX_HOSTS
 
-try:
-    from CybORG import CybORG  # noqa: F401
 
-    HAS_CYBORG = True
-except ImportError:
-    HAS_CYBORG = False
-
-cyborg_required = pytest.mark.skipif(not HAS_CYBORG, reason="CybORG not installed")
-
-
-@cyborg_required
 class TestGreenSyncParity:
     """Tests using precomputed green randoms for deterministic CybORG/JAX comparison."""
 

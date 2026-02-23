@@ -2,6 +2,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from CybORG import CybORG
+from CybORG.Agents import SleepAgent
+from CybORG.Simulator.Actions.AbstractActions.Analyse import Analyse
+from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.blue_analyse import apply_blue_analyse
@@ -19,18 +23,6 @@ from jaxborg.constants import (
 )
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
-
-try:
-    from CybORG import CybORG
-    from CybORG.Agents import SleepAgent
-    from CybORG.Simulator.Actions.AbstractActions.Analyse import Analyse
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    HAS_CYBORG = True
-except ImportError:
-    HAS_CYBORG = False
-
-cyborg_required = pytest.mark.skipif(not HAS_CYBORG, reason="CybORG not installed")
 
 SSH_SVC = SERVICE_IDS["SSHD"]
 
@@ -216,7 +208,6 @@ class TestApplyBlueActionDispatch:
         )
 
 
-@cyborg_required
 class TestDifferentialWithCybORG:
     @pytest.fixture
     def cyborg_env(self):

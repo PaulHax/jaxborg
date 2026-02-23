@@ -1,6 +1,9 @@
 import jax
 import jax.numpy as jnp
 import pytest
+from CybORG import CybORG
+from CybORG.Agents import FiniteStateRedAgent, SleepAgent
+from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions.encoding import (
     RED_SLEEP,
@@ -268,19 +271,6 @@ class TestFsmSessionRemoval:
         assert int(new_fsm[0, 5]) == FSM_S
 
 
-try:
-    from CybORG import CybORG
-    from CybORG.Agents import FiniteStateRedAgent, SleepAgent
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    HAS_CYBORG = True
-except ImportError:
-    HAS_CYBORG = False
-
-cyborg_required = pytest.mark.skipif(not HAS_CYBORG, reason="CybORG not installed")
-
-
-@cyborg_required
 class TestFsmRedDifferential:
     @pytest.fixture
     def cyborg_env(self):
@@ -332,5 +322,5 @@ class TestFsmRedDifferential:
         assert jax_idx == RED_EXPLOIT_SSH_START + host_idx
 
         roundtrip = jax_red_to_cyborg(jax_idx, 0, mappings)
-        assert type(roundtrip).__name__ == "SSHBruteForce"
+        assert type(roundtrip).__name__ == "ExploitRemoteService"
         assert roundtrip.ip_address == ip

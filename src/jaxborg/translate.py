@@ -142,6 +142,48 @@ _CYBORG_BLUE_DECOY_NAMES = {
 }
 
 
+class _FixedExploitSelector:
+    """Forces ExploitRemoteService to use a specific concrete exploit class."""
+
+    def __init__(self, exploit_class):
+        self._cls = exploit_class
+
+    def get_exploit_action(self, *, state, session, agent, ip_address, priority=None):
+        return self._cls(session=session, agent=agent, ip_address=ip_address)
+
+
+def _build_exploit_range_map():
+    from CybORG.Simulator.Actions.ConcreteActions.ExploitActions.BlueKeep import BlueKeep
+    from CybORG.Simulator.Actions.ConcreteActions.ExploitActions.EternalBlue import EternalBlue
+    from CybORG.Simulator.Actions.ConcreteActions.ExploitActions.FTPDirectoryTraversal import FTPDirectoryTraversal
+    from CybORG.Simulator.Actions.ConcreteActions.ExploitActions.HarakaRCE import HarakaRCE
+    from CybORG.Simulator.Actions.ConcreteActions.ExploitActions.HTTPRFI import HTTPRFI
+    from CybORG.Simulator.Actions.ConcreteActions.ExploitActions.HTTPSRFI import HTTPSRFI
+    from CybORG.Simulator.Actions.ConcreteActions.ExploitActions.SQLInjection import SQLInjection
+    from CybORG.Simulator.Actions.ConcreteActions.ExploitActions.SSHBruteForce import SSHBruteForce
+
+    return [
+        (RED_EXPLOIT_SSH_START, SSHBruteForce),
+        (RED_EXPLOIT_FTP_START, FTPDirectoryTraversal),
+        (RED_EXPLOIT_HTTP_START, HTTPRFI),
+        (RED_EXPLOIT_HTTPS_START, HTTPSRFI),
+        (RED_EXPLOIT_HARAKA_START, HarakaRCE),
+        (RED_EXPLOIT_SQL_START, SQLInjection),
+        (RED_EXPLOIT_ETERNALBLUE_START, EternalBlue),
+        (RED_EXPLOIT_BLUEKEEP_START, BlueKeep),
+    ]
+
+
+_EXPLOIT_RANGE_TO_CLASS = None
+
+
+def _get_exploit_range_map():
+    global _EXPLOIT_RANGE_TO_CLASS
+    if _EXPLOIT_RANGE_TO_CLASS is None:
+        _EXPLOIT_RANGE_TO_CLASS = _build_exploit_range_map()
+    return _EXPLOIT_RANGE_TO_CLASS
+
+
 def _agent_idx(agent_name: str) -> int:
     return int(agent_name.split("_")[-1])
 
@@ -235,44 +277,17 @@ def jax_red_to_cyborg(action_idx: int, agent_id: int, mappings: CC4Mappings):
             ip = mappings.hostname_to_ip[hostname]
             return cls(session=session, agent=agent_name, ip_address=ip)
 
-    _exploit_ranges = [
-        (RED_EXPLOIT_SSH_START, "SSHBruteForce"),
-        (RED_EXPLOIT_FTP_START, "FTPDirectoryTraversal"),
-        (RED_EXPLOIT_HTTP_START, "HTTPRFI"),
-        (RED_EXPLOIT_HTTPS_START, "HTTPSRFI"),
-        (RED_EXPLOIT_HARAKA_START, "HarakaRCE"),
-        (RED_EXPLOIT_SQL_START, "SQLInjection"),
-        (RED_EXPLOIT_ETERNALBLUE_START, "EternalBlue"),
-        (RED_EXPLOIT_BLUEKEEP_START, "BlueKeep"),
-    ]
-    for start, exploit_name in _exploit_ranges:
+    for start, exploit_cls in _get_exploit_range_map():
         end = start + GLOBAL_MAX_HOSTS
         if start <= action_idx < end:
-            from CybORG.Simulator.Actions import (
-                HTTPRFI,
-                HTTPSRFI,
-                BlueKeep,
-                EternalBlue,
-                FTPDirectoryTraversal,
-                HarakaRCE,
-                SQLInjection,
-                SSHBruteForce,
-            )
+            from CybORG.Simulator.Actions import ExploitRemoteService
 
-            exploit_cls = {
-                "SSHBruteForce": SSHBruteForce,
-                "FTPDirectoryTraversal": FTPDirectoryTraversal,
-                "HTTPRFI": HTTPRFI,
-                "HTTPSRFI": HTTPSRFI,
-                "HarakaRCE": HarakaRCE,
-                "SQLInjection": SQLInjection,
-                "EternalBlue": EternalBlue,
-                "BlueKeep": BlueKeep,
-            }[exploit_name]
             host_idx = action_idx - start
             hostname = mappings.idx_to_hostname[host_idx]
             ip = mappings.hostname_to_ip[hostname]
-            return exploit_cls(session=session, agent=agent_name, ip_address=ip)
+            action = ExploitRemoteService(session=session, agent=agent_name, ip_address=ip)
+            action.exploit_action_selector = _FixedExploitSelector(exploit_cls)
+            return action
 
     _hostname_actions = [
         (RED_PRIVESC_START, PrivilegeEscalate),

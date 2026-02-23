@@ -197,6 +197,88 @@ def snapshots_match(cyborg: StateSnapshot, jax: StateSnapshot) -> bool:
     return len(compare_snapshots(cyborg, jax)) == 0
 
 
+def compare_fast(cyborg_env, jax_state, jax_const, mappings) -> list[StateDiff]:
+    """Array-based comparison — bulk-transfers JAX arrays to numpy instead of per-element access."""
+    n = mappings.num_hosts
+    diffs = []
+
+    # JAX arrays → numpy in bulk (one transfer per array)
+    jax_compromised = np.asarray(jax_state.host_compromised[:n])
+    jax_sessions = np.asarray(jax_state.red_sessions[:NUM_RED_AGENTS, :n])
+    jax_priv = np.asarray(jax_state.red_privilege[:NUM_RED_AGENTS, :n])
+    jax_decoys = np.asarray(jax_state.host_decoys[:n])
+    jax_ot_stopped = np.asarray(jax_state.ot_service_stopped[:n])
+    jax_blocked = np.asarray(jax_state.blocked_zones)
+    jax_phase = int(jax_state.mission_phase)
+
+    # CybORG → numpy arrays
+    cyborg_state = cyborg_env.environment_controller.state
+    cyborg_compromised = np.zeros(n, dtype=np.int32)
+    cyborg_sessions = np.zeros((NUM_RED_AGENTS, n), dtype=np.bool_)
+    cyborg_priv = np.zeros((NUM_RED_AGENTS, n), dtype=np.int32)
+
+    for agent_name, sessions in cyborg_state.sessions.items():
+        if not agent_name.startswith("red_agent_"):
+            continue
+        red_idx = int(agent_name.split("_")[-1])
+        if red_idx >= NUM_RED_AGENTS:
+            continue
+        for sess in sessions.values():
+            if sess.hostname not in mappings.hostname_to_idx:
+                continue
+            hidx = mappings.hostname_to_idx[sess.hostname]
+            cyborg_sessions[red_idx, hidx] = True
+            level = 2 if (hasattr(sess, "username") and sess.username in ("root", "SYSTEM")) else 1
+            cyborg_priv[red_idx, hidx] = max(cyborg_priv[red_idx, hidx], level)
+            cyborg_compromised[hidx] = max(cyborg_compromised[hidx], level)
+
+    cyborg_phase = getattr(cyborg_state, "mission_phase", 0)
+
+    # Compare with vectorized ops
+    if cyborg_phase != jax_phase:
+        diffs.append(StateDiff("mission_phase", cyborg_phase, jax_phase))
+
+    comp_mismatch = np.where(cyborg_compromised != jax_compromised)[0]
+    for h in comp_mismatch:
+        diffs.append(StateDiff("host_compromised", int(cyborg_compromised[h]), int(jax_compromised[h]), f"host_{h}"))
+
+    for r in range(NUM_RED_AGENTS):
+        if not np.array_equal(cyborg_sessions[r], jax_sessions[r]):
+            cs = set(np.where(cyborg_sessions[r])[0].tolist())
+            js = set(np.where(jax_sessions[r])[0].tolist())
+            diffs.append(StateDiff("red_sessions", cs, js, f"red_agent_{r}"))
+
+    for r in range(NUM_RED_AGENTS):
+        priv_mismatch = np.where(cyborg_priv[r] != jax_priv[r])[0]
+        for h in priv_mismatch:
+            diffs.append(StateDiff("red_privilege", int(cyborg_priv[r, h]), int(jax_priv[r, h]), f"red_{r}_host_{h}"))
+
+    if np.any(jax_decoys):
+        for h in range(n):
+            if np.any(jax_decoys[h]):
+                diffs.append(StateDiff("host_decoys", None, tuple(bool(d) for d in jax_decoys[h]), f"host_{h}"))
+
+    if np.any(jax_ot_stopped):
+        for h in np.where(jax_ot_stopped)[0]:
+            diffs.append(StateDiff("ot_service_stopped", False, True, f"host_{h}"))
+
+    cyborg_blocked = set()
+    for to_subnet, from_list in getattr(cyborg_state, "blocks", {}).items():
+        for from_subnet in from_list:
+            cyborg_blocked.add((str(from_subnet), str(to_subnet)))
+    jax_blocked_set = set()
+    for src in range(NUM_SUBNETS):
+        for dst in range(NUM_SUBNETS):
+            if jax_blocked[src, dst]:
+                src_name = mappings.subnet_names.get(src, str(src))
+                dst_name = mappings.subnet_names.get(dst, str(dst))
+                jax_blocked_set.add((src_name, dst_name))
+    if cyborg_blocked != jax_blocked_set:
+        diffs.append(StateDiff("blocked_zones", cyborg_blocked, jax_blocked_set))
+
+    return diffs
+
+
 def format_diffs(diffs: list[StateDiff]) -> str:
     if not diffs:
         return "No differences"

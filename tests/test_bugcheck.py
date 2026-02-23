@@ -11,6 +11,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from CybORG import CybORG
+from CybORG.Agents import SleepAgent
+from CybORG.Agents.Wrappers.BlueFlatWrapper import BlueFlatWrapper
+from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.encoding import (
@@ -42,18 +46,6 @@ from jaxborg.observations import get_blue_obs
 from jaxborg.rewards import compute_rewards
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
-
-try:
-    from CybORG import CybORG
-    from CybORG.Agents import SleepAgent
-    from CybORG.Agents.Wrappers.BlueFlatWrapper import BlueFlatWrapper
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    HAS_CYBORG = True
-except ImportError:
-    HAS_CYBORG = False
-
-cyborg_required = pytest.mark.skipif(not HAS_CYBORG, reason="CybORG not installed")
 
 
 def _make_cyborg(seed=42, steps=500, blue_cls=SleepAgent, green_cls=SleepAgent, red_cls=SleepAgent):
@@ -96,7 +88,6 @@ def _find_blue_for_host(const, host_idx):
 # ---------------------------------------------------------------------------
 # BUG 1 analog: Host ordering must be alphabetical
 # ---------------------------------------------------------------------------
-@cyborg_required
 class TestHostOrdering:
     """CC2 BUG 1: Hosts must be in alphabetical order matching CybORG."""
 
@@ -112,7 +103,6 @@ class TestHostOrdering:
 # ---------------------------------------------------------------------------
 # BUG 4+20 analog: Observation encoding must match CybORG
 # ---------------------------------------------------------------------------
-@cyborg_required
 class TestObservationParity:
     """CC2 BUGs 4, 20, 21, 34: Blue observations must match CybORG exactly."""
 
@@ -225,7 +215,6 @@ class TestRedExploitEncoding:
 # ---------------------------------------------------------------------------
 # BUG 7 analog: Red initial foothold must be PRIVILEGED
 # ---------------------------------------------------------------------------
-@cyborg_required
 class TestRedInitialFoothold:
     """CC2 BUG 7: Red starts with PRIVILEGED (root/SYSTEM), not USER."""
 
@@ -255,7 +244,6 @@ class TestRedInitialFoothold:
 # ---------------------------------------------------------------------------
 # BUG 8 analog: Remove only works on detected user-level sessions
 # ---------------------------------------------------------------------------
-@cyborg_required
 class TestRemoveBehavior:
     """CC2 BUG 8: Remove should NOT clear privileged access."""
 
@@ -289,7 +277,6 @@ class TestRemoveBehavior:
 # ---------------------------------------------------------------------------
 # BUG 9 analog: Restore preserves initial Red foothold
 # ---------------------------------------------------------------------------
-@cyborg_required
 class TestRestorePreservesFoothold:
     """CC2 BUG 9: Restore on initial foothold host should preserve Red's session."""
 
@@ -395,7 +382,6 @@ class TestImpactRequiresOperational:
 # ---------------------------------------------------------------------------
 # BUG 13 analog: Exploit privilege levels
 # ---------------------------------------------------------------------------
-@cyborg_required
 class TestExploitPrivilegeLevels:
     """CC2 BUG 13: Certain exploits grant root directly."""
 
@@ -436,7 +422,6 @@ class TestExploitPrivilegeLevels:
 # ---------------------------------------------------------------------------
 # BUG 5+6 analog: Reward calculation parity
 # ---------------------------------------------------------------------------
-@cyborg_required
 class TestRewardParity:
     """CC2 BUGs 5, 6, 10, 26: Reward calculation must match CybORG."""
 
@@ -485,7 +470,6 @@ class TestDecoyMechanics:
 # ---------------------------------------------------------------------------
 # BUG 29 analog: Subnet adjacency must be correct
 # ---------------------------------------------------------------------------
-@cyborg_required
 class TestSubnetAdjacency:
     """CC2 BUG 29: Subnet adjacency must match CybORG NACL rules."""
 
@@ -530,7 +514,6 @@ class TestMonitorBehavior:
 # ---------------------------------------------------------------------------
 # Full episode differential: run CybORG FSM red + sleep blue, compare state
 # ---------------------------------------------------------------------------
-@cyborg_required
 class TestFullEpisodeParity:
     """Run a full episode with FSM red and sleep blue, compare key state fields."""
 
@@ -590,7 +573,6 @@ class TestFullEpisodeParity:
 # ---------------------------------------------------------------------------
 # Action mask differential across multiple steps
 # ---------------------------------------------------------------------------
-@cyborg_required
 class TestActionMaskAcrossSteps:
     """Verify action masks match CybORG not just at init, but after several steps."""
 

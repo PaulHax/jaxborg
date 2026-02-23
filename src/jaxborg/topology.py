@@ -251,8 +251,7 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
         red_agent_active[red_idx] = agent_info.active
         if agent_info.allowed_subnets:
             for sub_enum in agent_info.allowed_subnets:
-                sub_name = str(sub_enum).split(".")[-1] if "." in str(sub_enum) else str(sub_enum)
-                cyborg_suffix = sub_name.lower() + "_subnet"
+                cyborg_suffix = str(sub_enum)
                 if cyborg_suffix in CYBORG_SUFFIX_TO_ID:
                     red_agent_subnets[red_idx, CYBORG_SUFFIX_TO_ID[cyborg_suffix]] = True
 

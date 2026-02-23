@@ -2,6 +2,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from CybORG import CybORG
+from CybORG.Agents import EnterpriseGreenAgent, SleepAgent
+from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions.green import (
     FP_DETECTION_RATE,
@@ -16,17 +19,6 @@ from jaxborg.constants import (
 )
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_topology
-
-try:
-    from CybORG import CybORG
-    from CybORG.Agents import EnterpriseGreenAgent, SleepAgent
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    HAS_CYBORG = True
-except ImportError:
-    HAS_CYBORG = False
-
-cyborg_required = pytest.mark.skipif(not HAS_CYBORG, reason="CybORG not installed")
 
 
 @pytest.fixture
@@ -174,7 +166,6 @@ class TestDynamicTopology:
                 assert count >= 1, f"Seed {seed}: subnet {sid} has no hosts"
 
 
-@cyborg_required
 class TestDifferentialGreen:
     @pytest.fixture
     def cyborg_env(self):
@@ -210,7 +201,6 @@ class TestDifferentialGreen:
         assert FP_DETECTION_RATE == 0.01
 
 
-@cyborg_required
 class TestGreenStatisticalDifferential:
     @pytest.fixture
     def cyborg_env(self):

@@ -15,6 +15,7 @@ from jaxborg.actions.encoding import (
 )
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
+    NUM_RED_AGENTS,
     NUM_SUBNETS,
 )
 from jaxborg.state import CC4Const, CC4State
@@ -110,12 +111,13 @@ def _fsm_action_to_jax_action(fsm_action, target_host, target_subnet):
 
 
 def _pick_discover_subnet(state, const, agent_id, key):
+    # CybORG's action space only marks subnets valid after observation (initial
+    # session or green-phishing reassignment).  Match that by restricting to
+    # subnets where the agent currently holds a session.
     session_hosts = state.red_sessions[agent_id] & const.host_active
     subnet_one_hot = jax.nn.one_hot(const.host_subnet, NUM_SUBNETS, dtype=jnp.bool_)
     session_subnets = jnp.any(session_hosts[:, None] & subnet_one_hot, axis=0)
-    reachable = jnp.any(session_subnets[:, None] & const.subnet_adjacency, axis=0)
-    reachable = reachable | session_subnets
-    probs = jnp.where(reachable, 1.0, 0.0)
+    probs = jnp.where(session_subnets, 1.0, 0.0)
     probs = probs / jnp.maximum(jnp.sum(probs), 1e-8)
     return jax.random.choice(key, NUM_SUBNETS, p=probs)
 
@@ -230,6 +232,32 @@ def fsm_red_update_state(
     new_state = jnp.where((new_state == FSM_U) & ~in_allowed_subnets, FSM_F, new_state)
 
     return fsm_states.at[agent_id, target_host].set(new_state)
+
+
+def fsm_red_post_step_update(
+    state_before: CC4State,
+    state_after: CC4State,
+    const: CC4Const,
+    target_hosts: list,
+    fsm_actions: list,
+    eligible_flags: list,
+) -> CC4State:
+    fsm_states = state_after.fsm_host_states
+
+    for r in range(NUM_RED_AGENTS):
+        success = determine_fsm_success(state_before, state_after, r, target_hosts[r], fsm_actions[r])
+        skip = ~eligible_flags[r] | (fsm_actions[r] == FSM_ACT_DISCOVER_DECEPTION)
+        updated = fsm_red_update_state(fsm_states, const, r, target_hosts[r], fsm_actions[r], success)
+        fsm_states = jnp.where(skip, fsm_states, updated)
+
+    for r in range(NUM_RED_AGENTS):
+        agent_fsm = fsm_states[r]
+        has_session = state_after.red_sessions[r]
+        was_compromised = (agent_fsm == FSM_U) | (agent_fsm == FSM_UD) | (agent_fsm == FSM_R) | (agent_fsm == FSM_RD)
+        lost_session = was_compromised & ~has_session
+        fsm_states = fsm_states.at[r].set(jnp.where(lost_session, FSM_KD, agent_fsm))
+
+    return state_after.replace(fsm_host_states=fsm_states)
 
 
 def fsm_red_process_session_removal(

@@ -1,21 +1,6 @@
 import pytest
 
 
-def _cyborg_available():
-    try:
-        from CybORG import CybORG  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
-
-
-cyborg_required = pytest.mark.skipif(
-    not _cyborg_available(),
-    reason="CybORG not installed",
-)
-
-
 @pytest.fixture
 def cyborg_env():
     from CybORG import CybORG

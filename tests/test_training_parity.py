@@ -16,9 +16,6 @@ from jaxborg.actions.encoding import BLUE_MONITOR, BLUE_SLEEP, RED_SLEEP
 from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS
 from jaxborg.fsm_red_env import FsmRedCC4Env
 from jaxborg.observations import get_blue_obs
-from tests.conftest import cyborg_required
-
-pytestmark = cyborg_required
 
 
 def _setup_both_envs(seed=42):

@@ -9,7 +9,6 @@ from jaxborg.actions.encoding import (
 )
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.topology import build_const_from_cyborg
-from tests.conftest import cyborg_required
 
 
 def _cyborg_action_to_jax_index(action, label, agent_name, mappings):
@@ -40,7 +39,6 @@ def _cyborg_action_to_jax_index(action, label, agent_name, mappings):
         return None
 
 
-@cyborg_required
 class TestActionMaskDifferential:
     def test_masks_match_cyborg(self, cyborg_env):
         from CybORG.Agents.Wrappers import BlueFlatWrapper

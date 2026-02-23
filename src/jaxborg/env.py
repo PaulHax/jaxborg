@@ -21,6 +21,7 @@ from jaxborg.constants import (
     NUM_RED_AGENTS,
 )
 from jaxborg.observations import get_blue_obs, get_red_obs
+from jaxborg.reassignment import reassign_cross_subnet_sessions
 from jaxborg.rewards import advance_mission_phase, compute_rewards
 from jaxborg.state import CC4Const, CC4State, create_initial_state
 from jaxborg.topology import build_topology
@@ -173,6 +174,8 @@ class CC4Env(MultiAgentEnv):
 
         for b in range(NUM_BLUE_AGENTS):
             state = apply_blue_action(state, const, b, actions[f"blue_{b}"])
+
+        state = reassign_cross_subnet_sessions(state, const)
 
         reward = compute_rewards(
             state,
