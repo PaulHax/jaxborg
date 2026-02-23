@@ -57,6 +57,21 @@ Test infrastructure lives in `tests/differential/` (harness, action translator, 
 
 **Tests must exercise the training code path.** Differential tests should call the same functions used during training (`FsmRedCC4Env.step_env`, `apply_red_action`, `apply_green_agents`, `fsm_red_post_step_update`, etc.) rather than reimplementing logic in test code. Shared functions like `fsm_red_post_step_update` are extracted so both the training env and the differential harness use the same code. If a test needs custom orchestration (e.g. action duration tracking for CybORG parity), the JAX-side logic should still call into production functions.
 
+### TDD + Differential Test Quality (Required)
+
+For every fuzzer-found parity bug, follow strict red-green-refactor:
+1. **Red**: add a failing regression test first.
+2. **Green**: implement the smallest JAX fix that makes that exact test pass.
+3. **Refactor**: clean up only after parity is restored and tests stay green.
+
+Primary regression tests for parity bugs must be **explicit differential tests**:
+- Run both CybORG and JAX in the same test (typically via `CC4DifferentialHarness`).
+- Pin the exact reproduction context (seed, step, agent/action, hostnames/indices, field).
+- Assert concrete before/after state on both sides, then assert no diff for the target field.
+- Do not rely only on generic assertions like "no diffs at step N" without explicit context checks.
+
+Unit tests are allowed as secondary guardrails, but they do **not** replace the required differential regression for parity bugs.
+
 ### Precomputed Randoms for Deterministic Testing
 
 CybORG and JAX use independent RNG streams, making direct comparison of random-dependent behavior (green agents, detection rolls) impossible without synchronization. The solution is precomputed random arrays stored in `CC4State`:
@@ -79,7 +94,11 @@ It returns a `MismatchReport` on the first error: seed, step, field name, CybORG
 
 ### Investigation workflow
 
-1. **Reproduce**: write a failing test that runs the harness to the failing seed/step. Place the test in the appropriate file:
+1. **Reproduce (TDD red)**: write a failing **explicit differential regression** that runs CybORG and JAX to the failing seed/step and asserts the exact mismatch context.
+   - Prefer `tests/differential/test_parity_gaps.py` for fuzzer-reported seed/step reproductions.
+   - If adding to a subsystem file, keep it differential (pure CybORG + JAX in the same test), not JAX-only.
+   - One gap at a time: stop on first mismatch, add test, fix, rerun.
+2. Place the test in the appropriate file:
    - Red action bugs → `tests/subsystems/test_red_*.py` (exploit, discover, privesc, etc.)
    - Blue action bugs → `tests/subsystems/test_blue_*.py`
    - Green/phishing bugs → `tests/test_green_parity.py`
@@ -87,11 +106,13 @@ It returns a `MismatchReport` on the first error: seed, step, field name, CybORG
    - FSM state machine bugs → `tests/subsystems/test_fsm_red_agent.py`
    - Reward/phase bugs → `tests/subsystems/test_rewards.py` or `tests/subsystems/test_phase_transitions.py`
    - Cross-cutting or unclear → `tests/test_fuzz_gaps.py` (catch-all for fuzzer-found gaps)
-2. **Read CybORG source** at `.venv/lib/python3.11/site-packages/CybORG/` to understand the mechanic causing the divergence
-3. **Fix the JAX code** in `src/jaxborg/` to match CybORG's behavior
-4. **Verify**: `uv run pytest tests/ -v --ignore=tests/test_env_smoke.py --ignore=tests/test_training_parity.py -x`
-5. **Lint**: `uv run ruff check --fix . && uv run ruff format .`
-6. **Commit** with a message describing the gap and fix
+3. **Read CybORG source** at `.venv/lib/python3.11/site-packages/CybORG/` to understand the mechanic causing the divergence
+4. **Fix the JAX code** in `src/jaxborg/` to match CybORG's behavior
+5. **Verify targeted tests first** (new regression + closest subsystem tests), then run:
+   - `uv run pytest tests/ -v --ignore=tests/test_env_smoke.py --ignore=tests/test_training_parity.py -x`
+   - rerun differential fuzzing to find the next gap
+6. **Lint**: `uv run ruff check --fix . && uv run ruff format .`
+7. **Commit** with a message describing the gap and fix
 
 ### Common root causes
 
