@@ -52,19 +52,39 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
     removed_anchor_session = (
         covers_host & (session_counts[:, target_host] > 0) & (state.red_scan_anchor_host == target_host)
     )
+    removed_target_session = (
+        covers_host & (session_counts[:, target_host] > 0) & (red_session_count[:, target_host] == 0)
+    )
     stale_session_hosts = (session_counts > 0) & (state.red_suspicious_process_count == 0)
     unique_stale_target = stale_session_hosts[:, target_host] & (jnp.sum(stale_session_hosts, axis=1) == 1)
     removed_scanned_session = covers_host & unique_stale_target
-    clear_scanned = cleared_all_sessions | removed_anchor_session | removed_scanned_session
+    anchor_idx = jnp.clip(state.red_scan_anchor_host, 0, red_session_count.shape[1] - 1)
+    anchor_is_scanned = (state.red_scan_anchor_host >= 0) & state.red_scanned_hosts[
+        jnp.arange(red_session_count.shape[0]), anchor_idx
+    ]
+    scanned_hosts_count = jnp.sum(state.red_scanned_hosts, axis=1)
+    session_hosts_count = jnp.sum(session_counts > 0, axis=1)
+    removed_stale_untracked_primary = (
+        removed_target_session
+        & ~state.red_scanned_hosts[:, target_host]
+        & (scanned_hosts_count == 1)
+        & ~anchor_is_scanned
+        & (session_hosts_count >= 3)
+    )
+    clear_scanned = (
+        cleared_all_sessions | removed_anchor_session | removed_scanned_session | removed_stale_untracked_primary
+    )
     red_scanned_hosts = jnp.where(
         clear_scanned[:, None],
         jnp.zeros_like(state.red_scanned_hosts),
         state.red_scanned_hosts,
     )
     session_hosts = (red_session_count > 0) & const.host_active[None, :]
-    last_session_from_end = jnp.argmax(jnp.flip(session_hosts, axis=1), axis=1)
-    last_session_host = red_session_count.shape[1] - 1 - last_session_from_end
-    fallback_anchor = jnp.where(has_any_sessions_now, last_session_host, -1)
+    host_indices = jnp.arange(red_session_count.shape[1], dtype=jnp.int32)
+    distance_from_target = jnp.abs(host_indices[None, :] - jnp.int32(target_host))
+    masked_distance = jnp.where(session_hosts, distance_from_target, -1)
+    farthest_session_host = jnp.argmax(masked_distance, axis=1)
+    fallback_anchor = jnp.where(has_any_sessions_now, farthest_session_host, -1)
     red_scan_anchor_host = jnp.where(
         cleared_all_sessions | removed_anchor_session,
         fallback_anchor,
@@ -112,12 +132,6 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         state.host_service_reliability.at[target_host].set(100),
         state.host_service_reliability,
     )
-    blue_suspicious_pid_budget = jnp.where(
-        covers_host,
-        state.blue_suspicious_pid_budget.at[:, target_host].set(0),
-        state.blue_suspicious_pid_budget,
-    )
-
     return state.replace(
         host_compromised=host_compromised,
         red_sessions=red_sessions,
@@ -133,7 +147,7 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         host_decoys=host_decoys,
         host_activity_detected=host_activity_detected,
         host_suspicious_process=host_suspicious_process,
-        blue_suspicious_pid_budget=blue_suspicious_pid_budget,
+        blue_suspicious_pid_budget=state.blue_suspicious_pid_budget,
         ot_service_stopped=ot_service_stopped,
         host_service_reliability=host_service_reliability,
     )

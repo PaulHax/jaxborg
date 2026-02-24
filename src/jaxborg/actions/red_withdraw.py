@@ -77,14 +77,6 @@ def apply_withdraw(
         state.host_suspicious_process.at[target_host].set(any_suspicious),
         state.host_suspicious_process,
     )
-    active_sessions_on_host = jnp.sum(red_session_count[:, target_host])
-    clipped_budget_col = jnp.minimum(state.blue_suspicious_pid_budget[:, target_host], active_sessions_on_host)
-    blue_suspicious_pid_budget = jnp.where(
-        success,
-        state.blue_suspicious_pid_budget.at[:, target_host].set(clipped_budget_col),
-        state.blue_suspicious_pid_budget,
-    )
-
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
@@ -96,5 +88,5 @@ def apply_withdraw(
         host_compromised=host_compromised,
         host_has_malware=host_has_malware,
         host_suspicious_process=host_suspicious_process,
-        blue_suspicious_pid_budget=blue_suspicious_pid_budget,
+        blue_suspicious_pid_budget=state.blue_suspicious_pid_budget,
     )

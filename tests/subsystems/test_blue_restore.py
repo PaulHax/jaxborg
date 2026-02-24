@@ -6,6 +6,7 @@ from CybORG import CybORG
 from CybORG.Agents import SleepAgent
 from CybORG.Shared.Session import RedAbstractSession
 from CybORG.Simulator.Actions import Restore
+from CybORG.Simulator.Actions.ConcreteActions.RedSessionCheck import RedSessionCheck
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action
@@ -631,4 +632,333 @@ class TestDifferentialWithCybORG:
 
         jax_scanned = {h for h in range(int(const.num_hosts)) if bool(new_state.red_scanned_hosts[2, h])}
         assert cy_scanned == {keep, remote}
+        assert jax_scanned == cy_scanned
+
+    def test_restore_clears_scan_memory_after_primary_session_reassignment_matches_cyborg(self, cyborg_and_jax):
+        cyborg_env, const, state = cyborg_and_jax
+        cy_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cy_state.hosts.keys())
+
+        base = _find_host_in_subnet(const, "OPERATIONAL_ZONE_A")
+        assert base is not None
+        subnet_id = int(const.host_subnet[base])
+        subnet_hosts = []
+        for h in range(int(const.num_hosts)):
+            if not bool(const.host_active[h]) or bool(const.host_is_router[h]):
+                continue
+            if int(const.host_subnet[h]) != subnet_id:
+                continue
+            subnet_hosts.append(h)
+        assert len(subnet_hosts) >= 5
+        target, keep_1, keep_2, keep_3, promoted = subnet_hosts[:5]
+
+        target_hostname = sorted_hosts[target]
+        keep_1_hostname = sorted_hosts[keep_1]
+        keep_2_hostname = sorted_hosts[keep_2]
+        keep_3_hostname = sorted_hosts[keep_3]
+        promoted_hostname = sorted_hosts[promoted]
+
+        blue_target = _find_blue_for_host(const, target)
+        assert blue_target is not None
+
+        for ident, hostname in (
+            (0, target_hostname),
+            (1, keep_1_hostname),
+            (3, keep_2_hostname),
+            (4, keep_3_hostname),
+            (7, promoted_hostname),
+        ):
+            cy_state.add_session(
+                RedAbstractSession(
+                    ident=ident,
+                    hostname=hostname,
+                    username="user",
+                    agent="red_agent_2",
+                    parent=0 if ident != 0 else None,
+                    session_type="shell",
+                    pid=None,
+                )
+            )
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[2, target]
+            .set(True)
+            .at[2, keep_1]
+            .set(True)
+            .at[2, keep_2]
+            .set(True)
+            .at[2, keep_3]
+            .set(True)
+            .at[2, promoted]
+            .set(True),
+            red_session_count=state.red_session_count.at[2, target]
+            .set(1)
+            .at[2, keep_1]
+            .set(1)
+            .at[2, keep_2]
+            .set(1)
+            .at[2, keep_3]
+            .set(1)
+            .at[2, promoted]
+            .set(1),
+            red_privilege=state.red_privilege.at[2, target]
+            .set(COMPROMISE_USER)
+            .at[2, keep_1]
+            .set(COMPROMISE_USER)
+            .at[2, keep_2]
+            .set(COMPROMISE_USER)
+            .at[2, keep_3]
+            .set(COMPROMISE_USER)
+            .at[2, promoted]
+            .set(COMPROMISE_USER),
+            host_compromised=state.host_compromised.at[target]
+            .set(COMPROMISE_USER)
+            .at[keep_1]
+            .set(COMPROMISE_USER)
+            .at[keep_2]
+            .set(COMPROMISE_USER)
+            .at[keep_3]
+            .set(COMPROMISE_USER)
+            .at[promoted]
+            .set(COMPROMISE_USER),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[2].set(target),
+        )
+
+        restore_1 = Restore(session=0, agent=f"blue_agent_{blue_target}", hostname=target_hostname)
+        restore_1.duration = 1
+        cy_obs_1 = restore_1.execute(cy_state)
+        assert cy_obs_1.success
+
+        action_1 = encode_blue_action("Restore", target, blue_target)
+        state = apply_blue_action(state, const, blue_target, action_1)
+
+        # CybORG promotes a new primary session when id=0 is removed; make this deterministic.
+        cy_state.np_random = np.random.default_rng(0)
+        RedSessionCheck(session=0, agent="red_agent_2").execute(cy_state)
+        promoted_now = sorted_hosts.index(cy_state.sessions["red_agent_2"][0].hostname)
+        assert promoted_now == promoted
+
+        target_ip = next(ip for ip, host in cy_state.ip_addresses.items() if host == target_hostname)
+        keep_1_ip = next(ip for ip, host in cy_state.ip_addresses.items() if host == keep_1_hostname)
+        cy_state.sessions["red_agent_2"][0].addport(target_ip, 22)
+        cy_state.sessions["red_agent_2"][0].addport(keep_1_ip, 443)
+        state = state.replace(red_scanned_hosts=state.red_scanned_hosts.at[2, target].set(True).at[2, keep_1].set(True))
+
+        blue_promoted = _find_blue_for_host(const, promoted_now)
+        assert blue_promoted is not None
+        restore_2 = Restore(session=0, agent=f"blue_agent_{blue_promoted}", hostname=sorted_hosts[promoted_now])
+        restore_2.duration = 1
+        cy_obs_2 = restore_2.execute(cy_state)
+        assert cy_obs_2.success
+
+        action_2 = encode_blue_action("Restore", promoted_now, blue_promoted)
+        new_state = apply_blue_action(state, const, blue_promoted, action_2)
+
+        cy_scanned = set()
+        for sess in cy_state.sessions["red_agent_2"].values():
+            for ip in getattr(sess, "ports", {}).keys():
+                host = cy_state.ip_addresses.get(ip)
+                if host is not None:
+                    cy_scanned.add(sorted_hosts.index(host))
+
+        jax_scanned = {h for h in range(int(const.num_hosts)) if bool(new_state.red_scanned_hosts[2, h])}
+        assert cy_scanned == set()
+        assert jax_scanned == cy_scanned
+
+    def test_restore_reassignment_between_two_remaining_sessions_clears_scan_memory_matches_cyborg(
+        self, cyborg_and_jax
+    ):
+        cyborg_env, const, state = cyborg_and_jax
+        cy_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cy_state.hosts.keys())
+
+        base = _find_host_in_subnet(const, "OPERATIONAL_ZONE_A")
+        assert base is not None
+        subnet_id = int(const.host_subnet[base])
+        subnet_hosts = []
+        for h in range(int(const.num_hosts)):
+            if not bool(const.host_active[h]) or bool(const.host_is_router[h]):
+                continue
+            if int(const.host_subnet[h]) != subnet_id:
+                continue
+            subnet_hosts.append(h)
+        assert len(subnet_hosts) >= 4
+        promoted, target, keep = subnet_hosts[0], subnet_hosts[2], subnet_hosts[3]
+
+        promoted_hostname = sorted_hosts[promoted]
+        target_hostname = sorted_hosts[target]
+        keep_hostname = sorted_hosts[keep]
+
+        blue_target = _find_blue_for_host(const, target)
+        assert blue_target is not None
+
+        for ident, hostname in ((0, target_hostname), (2, keep_hostname), (3, promoted_hostname)):
+            cy_state.add_session(
+                RedAbstractSession(
+                    ident=ident,
+                    hostname=hostname,
+                    username="user",
+                    agent="red_agent_2",
+                    parent=0 if ident != 0 else None,
+                    session_type="shell",
+                    pid=None,
+                )
+            )
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[2, promoted].set(True).at[2, target].set(True).at[2, keep].set(True),
+            red_session_count=state.red_session_count.at[2, promoted].set(1).at[2, target].set(1).at[2, keep].set(1),
+            red_privilege=state.red_privilege.at[2, promoted]
+            .set(COMPROMISE_USER)
+            .at[2, target]
+            .set(COMPROMISE_USER)
+            .at[2, keep]
+            .set(COMPROMISE_USER),
+            host_compromised=state.host_compromised.at[promoted]
+            .set(COMPROMISE_USER)
+            .at[target]
+            .set(COMPROMISE_USER)
+            .at[keep]
+            .set(COMPROMISE_USER),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[2].set(target),
+        )
+
+        restore_1 = Restore(session=0, agent=f"blue_agent_{blue_target}", hostname=target_hostname)
+        restore_1.duration = 1
+        cy_obs_1 = restore_1.execute(cy_state)
+        assert cy_obs_1.success
+        state = apply_blue_action(state, const, blue_target, encode_blue_action("Restore", target, blue_target))
+
+        # Deterministic primary-session promotion to id=0 after removing the original primary.
+        cy_state.np_random = np.random.default_rng(0)
+        RedSessionCheck(session=0, agent="red_agent_2").execute(cy_state)
+        promoted_now = sorted_hosts.index(cy_state.sessions["red_agent_2"][0].hostname)
+        assert promoted_now == promoted
+
+        keep_ip = next(ip for ip, host in cy_state.ip_addresses.items() if host == keep_hostname)
+        cy_state.sessions["red_agent_2"][0].addport(keep_ip, 22)
+        state = state.replace(red_scanned_hosts=state.red_scanned_hosts.at[2, keep].set(True))
+
+        blue_promoted = _find_blue_for_host(const, promoted_now)
+        assert blue_promoted is not None
+        restore_2 = Restore(session=0, agent=f"blue_agent_{blue_promoted}", hostname=sorted_hosts[promoted_now])
+        restore_2.duration = 1
+        cy_obs_2 = restore_2.execute(cy_state)
+        assert cy_obs_2.success
+
+        new_state = apply_blue_action(
+            state, const, blue_promoted, encode_blue_action("Restore", promoted_now, blue_promoted)
+        )
+
+        cy_scanned = set()
+        for sess in cy_state.sessions["red_agent_2"].values():
+            for ip in getattr(sess, "ports", {}).keys():
+                host = cy_state.ip_addresses.get(ip)
+                if host is not None:
+                    cy_scanned.add(sorted_hosts.index(host))
+
+        jax_scanned = {h for h in range(int(const.num_hosts)) if bool(new_state.red_scanned_hosts[2, h])}
+        assert cy_scanned == set()
+        assert jax_scanned == cy_scanned
+
+    def test_restore_with_stale_anchor_and_single_remote_scan_clears_matches_cyborg(self, cyborg_and_jax):
+        cyborg_env, const, state = cyborg_and_jax
+        cy_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cy_state.hosts.keys())
+
+        base = _find_host_in_subnet(const, "OPERATIONAL_ZONE_A")
+        assert base is not None
+        subnet_id = int(const.host_subnet[base])
+        subnet_hosts = []
+        for h in range(int(const.num_hosts)):
+            if not bool(const.host_active[h]) or bool(const.host_is_router[h]):
+                continue
+            if int(const.host_subnet[h]) != subnet_id:
+                continue
+            subnet_hosts.append(h)
+        assert len(subnet_hosts) >= 4
+        other_a, target, scanned_host, stale_anchor = subnet_hosts[:4]
+
+        other_a_hostname = sorted_hosts[other_a]
+        target_hostname = sorted_hosts[target]
+        scanned_hostname = sorted_hosts[scanned_host]
+        stale_anchor_hostname = sorted_hosts[stale_anchor]
+
+        blue_target = _find_blue_for_host(const, target)
+        assert blue_target is not None
+
+        for ident, hostname in (
+            (0, target_hostname),
+            (1, other_a_hostname),
+            (3, stale_anchor_hostname),
+            (4, scanned_hostname),
+        ):
+            cy_state.add_session(
+                RedAbstractSession(
+                    ident=ident,
+                    hostname=hostname,
+                    username="user",
+                    agent="red_agent_2",
+                    parent=0 if ident != 0 else None,
+                    session_type="shell",
+                    pid=None,
+                )
+            )
+
+        scanned_ip = next(ip for ip, host in cy_state.ip_addresses.items() if host == scanned_hostname)
+        cy_state.sessions["red_agent_2"][0].addport(scanned_ip, 22)
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[2, target]
+            .set(True)
+            .at[2, other_a]
+            .set(True)
+            .at[2, stale_anchor]
+            .set(True)
+            .at[2, scanned_host]
+            .set(True),
+            red_session_count=state.red_session_count.at[2, target]
+            .set(1)
+            .at[2, other_a]
+            .set(1)
+            .at[2, stale_anchor]
+            .set(1)
+            .at[2, scanned_host]
+            .set(1),
+            red_privilege=state.red_privilege.at[2, target]
+            .set(COMPROMISE_USER)
+            .at[2, other_a]
+            .set(COMPROMISE_USER)
+            .at[2, stale_anchor]
+            .set(COMPROMISE_USER)
+            .at[2, scanned_host]
+            .set(COMPROMISE_USER),
+            host_compromised=state.host_compromised.at[target]
+            .set(COMPROMISE_USER)
+            .at[other_a]
+            .set(COMPROMISE_USER)
+            .at[stale_anchor]
+            .set(COMPROMISE_USER)
+            .at[scanned_host]
+            .set(COMPROMISE_USER),
+            red_scanned_hosts=state.red_scanned_hosts.at[2, scanned_host].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[2].set(stale_anchor),
+        )
+
+        restore_action = Restore(session=0, agent=f"blue_agent_{blue_target}", hostname=target_hostname)
+        restore_action.duration = 1
+        cy_obs = restore_action.execute(cy_state)
+        assert cy_obs.success
+
+        new_state = apply_blue_action(state, const, blue_target, encode_blue_action("Restore", target, blue_target))
+
+        cy_scanned = set()
+        for sess in cy_state.sessions["red_agent_2"].values():
+            for ip in getattr(sess, "ports", {}).keys():
+                host = cy_state.ip_addresses.get(ip)
+                if host is not None:
+                    cy_scanned.add(sorted_hosts.index(host))
+
+        jax_scanned = {h for h in range(int(const.num_hosts)) if bool(new_state.red_scanned_hosts[2, h])}
+        assert cy_scanned == set()
         assert jax_scanned == cy_scanned
