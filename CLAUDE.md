@@ -147,7 +147,7 @@ It returns a `MismatchReport` on the first error: seed, step, field name, CybORG
    - Session/topology bugs → `tests/subsystems/test_dynamic_topology.py`
    - FSM state machine bugs → `tests/subsystems/test_fsm_red_agent.py`
    - Reward/phase bugs → `tests/subsystems/test_rewards.py` or `tests/subsystems/test_phase_transitions.py`
-   - Cross-cutting or unclear → `tests/test_fuzz_gaps.py` (catch-all for fuzzer-found gaps)
+   - Cross-cutting or unclear → place in the closest subsystem differential test file and make the context explicit in the test name/body
 3. **Read CybORG source** at `.venv/lib/python3.11/site-packages/CybORG/` to understand the mechanic causing the divergence
 4. **Fix the JAX code** in `src/jaxborg/` to match CybORG's behavior
 5. **Verify targeted tests first** (new regression + closest subsystem tests), then run:

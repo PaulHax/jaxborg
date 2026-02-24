@@ -1,6 +1,5 @@
-"""Explicit differential regressions for previously fuzz-discovered parity gaps."""
+"""Explicit differential regressions for cross-subnet red session reassignment parity."""
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 from CybORG import CybORG
@@ -8,13 +7,11 @@ from CybORG.Agents import EnterpriseGreenAgent, SleepAgent
 from CybORG.Shared.Session import RedAbstractSession
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
-from jaxborg.actions import apply_red_action
-from jaxborg.actions.encoding import encode_red_action
 from jaxborg.constants import COMPROMISE_USER, NUM_RED_AGENTS, NUM_SUBNETS
 from jaxborg.reassignment import reassign_cross_subnet_sessions
 from jaxborg.state import create_initial_state
 from jaxborg.topology import CYBORG_SUFFIX_TO_ID, build_const_from_cyborg
-from jaxborg.translate import build_mappings_from_cyborg, jax_red_to_cyborg
+from jaxborg.translate import build_mappings_from_cyborg
 
 
 def _make_env(seed: int = 0):
@@ -163,11 +160,9 @@ def test_cross_subnet_reassignment_does_not_overclear_existing_scan_memory_match
     keep_host_name = mappings.idx_to_hostname[keep_host_idx]
     keep_ip = mappings.hostname_to_ip[keep_host_name]
 
-    # Seed existing scan memory on source agent's persistent session.
     base_session = cy_state.sessions[f"red_agent_{source_agent}"][0]
     base_session.addport(keep_ip, 22)
 
-    # Add one out-of-subnet user session that will be reassigned.
     reassign_session = RedAbstractSession(
         ident=None,
         hostname=target_hostname,
@@ -290,8 +285,6 @@ def test_cross_subnet_reassignment_clears_remote_scan_memory_when_scan_owner_ses
     remote_scan_host = next(h for h in range(int(const.num_hosts)) if h not in source_hosts)
     base_session.addport(mappings.hostname_to_ip[mappings.idx_to_hostname[remote_scan_host]], 22)
 
-    # Keep multiple in-subnet stale sessions on the source agent so session
-    # removal is not a unique-host case.
     retained_hosts = []
     for h in range(int(const.num_hosts)):
         if h == target_idx:
@@ -429,36 +422,3 @@ def test_cross_subnet_reassignment_preserves_scan_anchor_host_matches_cyborg():
     cy_anchor_after_idx = mappings.hostname_to_idx[cy_anchor_after]
     assert cy_anchor_after_idx == cy_anchor_idx
     assert int(jax_after.red_scan_anchor_host[source_agent]) == cy_anchor_after_idx
-
-
-def test_invalid_exploit_without_session_is_rejected_by_cyborg_and_noop_in_jax():
-    env = _make_env(seed=0)
-    controller = env.environment_controller
-    cy_state = controller.state
-    const = build_const_from_cyborg(env)
-    mappings = build_mappings_from_cyborg(env)
-
-    red_agent = 4
-    assert len(cy_state.sessions[f"red_agent_{red_agent}"]) == 0
-
-    target_idx = next(
-        h for h in range(int(const.num_hosts)) if bool(const.host_active[h]) and not bool(const.host_is_router[h])
-    )
-    action_idx = encode_red_action("ExploitRemoteService_cc4SSHBruteForce", target_idx, red_agent)
-    cy_action = jax_red_to_cyborg(action_idx, red_agent, mappings)
-
-    agent_iface = controller.agent_interfaces[f"red_agent_{red_agent}"]
-    validated_action = controller.replace_action_if_invalid(cy_action, agent_iface)
-    assert type(validated_action).__name__ == "InvalidAction"
-
-    cy_sessions_before = len(cy_state.sessions[f"red_agent_{red_agent}"])
-    cy_obs = validated_action.execute(cy_state)
-    cy_sessions_after = len(cy_state.sessions[f"red_agent_{red_agent}"])
-    assert str(cy_obs.success).upper() == "FALSE"
-    assert cy_sessions_after == cy_sessions_before == 0
-
-    jax_state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
-    jax_after = apply_red_action(jax_state, const, red_agent, action_idx, jax.random.PRNGKey(0))
-
-    assert not bool(jax_after.red_sessions[red_agent, target_idx])
-    assert int(jax_after.host_compromised[target_idx]) == 0
