@@ -35,7 +35,7 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
     echo "  Parity Loop — Iteration $i / $MAX_ITERATIONS"
     echo "============================================"
 
-    echo "Running fuzzer (seeds=0-$((FUZZ_SEEDS-1)), steps=$FUZZ_STEPS, mismatch_mode=$FUZZ_MISMATCH_MODE, blue_agent=$FUZZ_BLUE_AGENT, blue_action_source=$FUZZ_BLUE_ACTION_SOURCE)..."
+    echo "Running fuzzer (seeds=0-$((FUZZ_SEEDS-1)), steps=$FUZZ_STEPS, mismatch_mode=$FUZZ_MISMATCH_MODE, blue_agent=$FUZZ_BLUE_AGENT, blue_action_source=$FUZZ_BLUE_ACTION_SOURCE, strict_differential=True)..."
     output=$(uv run python -u -c "
 from tests.differential.fuzzer import run_differential_fuzz
 r = run_differential_fuzz(

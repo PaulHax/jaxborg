@@ -71,12 +71,19 @@ class CC4State:
     ot_service_stopped: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
 
     red_sessions: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
+    red_session_count: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int32 — exact session multiplicity
+    red_session_multiple: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool — tracks 2+ sessions on host
+    red_session_many: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool — tracks 3+ sessions on host
+    red_suspicious_process_count: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int — known suspicious user pids
     red_privilege: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int — 0/1/2
     red_discovered_hosts: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
     red_scanned_hosts: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
+    red_scan_anchor_host: chex.Array  # (NUM_RED_AGENTS,) int — host owning CybORG-like scan memory session
 
     red_activity_this_step: chex.Array  # (GLOBAL_MAX_HOSTS,) int — 0=None, 1=Scan, 2=Exploit
     host_activity_detected: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
+    blue_suspicious_pid_budget: chex.Array  # (NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS) int — known suspicious pids
+    host_suspicious_process: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
     host_has_malware: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
 
     blocked_zones: chex.Array  # (NUM_SUBNETS, NUM_SUBNETS) bool
@@ -143,11 +150,18 @@ def create_initial_state() -> CC4State:
         host_decoys=jnp.zeros((GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES), dtype=jnp.bool_),
         ot_service_stopped=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         red_sessions=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
+        red_session_count=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
+        red_session_multiple=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
+        red_session_many=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
+        red_suspicious_process_count=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
         red_privilege=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
         red_discovered_hosts=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_scanned_hosts=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
+        red_scan_anchor_host=jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32),
         red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
         host_activity_detected=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
+        blue_suspicious_pid_budget=jnp.zeros((NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
+        host_suspicious_process=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         host_has_malware=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         blocked_zones=jnp.zeros((NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_),
         messages=jnp.zeros((NUM_BLUE_AGENTS, NUM_BLUE_AGENTS, MESSAGE_LENGTH), dtype=jnp.float32),

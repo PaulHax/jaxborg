@@ -35,11 +35,13 @@ class CC4EnvState:
 
 def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
     red_sessions = state.red_sessions
+    red_session_count = state.red_session_count
     red_privilege = state.red_privilege
     red_discovered = state.red_discovered_hosts | const.red_initial_discovered_hosts
     red_scanned = state.red_scanned_hosts | const.red_initial_scanned_hosts
     fsm_states = state.fsm_host_states
     host_compromised = state.host_compromised
+    red_scan_anchor_host = state.red_scan_anchor_host
 
     for r in range(NUM_RED_AGENTS):
         start_host = const.red_start_hosts[r]
@@ -48,6 +50,11 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
             is_active,
             red_sessions.at[r, start_host].set(True),
             red_sessions,
+        )
+        red_session_count = jnp.where(
+            is_active,
+            red_session_count.at[r, start_host].set(1),
+            red_session_count,
         )
         red_privilege = jnp.where(
             is_active,
@@ -69,12 +76,19 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
             fsm_states.at[r].set(fsm_red_init_states(const, r)),
             fsm_states,
         )
+        red_scan_anchor_host = jnp.where(
+            is_active,
+            red_scan_anchor_host.at[r].set(start_host),
+            red_scan_anchor_host,
+        )
 
     return state.replace(
         red_sessions=red_sessions,
+        red_session_count=red_session_count,
         red_privilege=red_privilege,
         red_discovered_hosts=red_discovered,
         red_scanned_hosts=red_scanned,
+        red_scan_anchor_host=red_scan_anchor_host,
         host_compromised=host_compromised,
         fsm_host_states=fsm_states,
     )

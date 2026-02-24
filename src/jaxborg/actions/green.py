@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 
 from jaxborg.actions.rng import sample_green_random
+from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import (
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
@@ -86,11 +87,29 @@ def _apply_single_green(
     red_agent = _find_phishing_red_agent(state, const, host_idx)
     any_red_on_host = jnp.any(state.red_sessions[:, host_idx])
     phish_creates_session = do_phish & (red_agent >= 0) & ~any_red_on_host
+    session_counts = effective_session_counts(state)
+    had_count_for_agent = jnp.where(red_agent >= 0, session_counts[red_agent, host_idx], 0)
+    new_count_for_agent = had_count_for_agent + phish_creates_session.astype(jnp.int32)
 
     red_sessions = jnp.where(
         phish_creates_session,
-        state.red_sessions.at[red_agent, host_idx].set(True),
+        state.red_sessions.at[red_agent, host_idx].set(new_count_for_agent > 0),
         state.red_sessions,
+    )
+    red_session_count = jnp.where(
+        phish_creates_session,
+        session_counts.at[red_agent, host_idx].set(new_count_for_agent),
+        session_counts,
+    )
+    red_session_multiple = jnp.where(
+        phish_creates_session,
+        state.red_session_multiple.at[red_agent, host_idx].set(new_count_for_agent > 1),
+        state.red_session_multiple,
+    )
+    red_session_many = jnp.where(
+        phish_creates_session,
+        state.red_session_many.at[red_agent, host_idx].set(new_count_for_agent > 2),
+        state.red_session_many,
     )
     red_privilege = jnp.where(
         phish_creates_session,
@@ -104,7 +123,11 @@ def _apply_single_green(
         state.host_compromised.at[host_idx].set(jnp.maximum(state.host_compromised[host_idx], COMPROMISE_USER)),
         state.host_compromised,
     )
-
+    red_scan_anchor_host = jnp.where(
+        phish_creates_session & (red_agent >= 0) & (state.red_scan_anchor_host[red_agent] < 0),
+        state.red_scan_anchor_host.at[red_agent].set(host_idx),
+        state.red_scan_anchor_host,
+    )
     # -- GreenAccessService --
     src_subnet = const.host_subnet[host_idx]
     phase = state.mission_phase
@@ -160,7 +183,11 @@ def _apply_single_green(
 
     return state.replace(
         red_sessions=red_sessions,
+        red_session_count=red_session_count,
+        red_session_multiple=red_session_multiple,
+        red_session_many=red_session_many,
         red_privilege=red_privilege,
+        red_scan_anchor_host=red_scan_anchor_host,
         host_compromised=host_compromised,
         host_activity_detected=host_activity_detected,
         green_lwf_this_step=green_lwf_this_step,

@@ -26,8 +26,9 @@ MAX_ITERATIONS=5 bash scripts/parity_loop.sh
 
 1. **Fuzzer** runs `tests/differential/fuzzer.py` across N seeds x M steps
 2. On first mismatch, prints: seed, step, field, CybORG value, JAX value, and exits non-zero
-3. You then fix the gap manually (or with Codex/Claude), following the "Fixing Differential Gaps" workflow in `CLAUDE.md`
-4. Rerun the loop
+3. Harness mode is strict-only: no CybORG->JAX state patching/injection is allowed during replay
+4. You then fix the gap manually (or with Codex/Claude), following the "Fixing Differential Gaps" workflow in `CLAUDE.md`
+5. Rerun the loop
 
 ### Running with Codex CLI directly
 

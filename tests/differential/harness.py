@@ -17,7 +17,11 @@ from jaxborg.agents.fsm_red import (
     fsm_red_init_states,
     fsm_red_post_step_update,
 )
-from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS
+from jaxborg.constants import (
+    GLOBAL_MAX_HOSTS,
+    NUM_BLUE_AGENTS,
+    NUM_RED_AGENTS,
+)
 from jaxborg.reassignment import reassign_cross_subnet_sessions
 from jaxborg.rewards import advance_mission_phase
 from jaxborg.state import create_initial_state
@@ -25,6 +29,7 @@ from jaxborg.topology import build_const_from_cyborg
 from jaxborg.translate import (
     build_mappings_from_cyborg,
     cyborg_blue_to_jax,
+    cyborg_red_to_jax,
     jax_blue_to_cyborg,
     jax_red_to_cyborg,
 )
@@ -71,6 +76,20 @@ _ZERO_INT_HOSTS = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
 _ZERO_BOOL_HOSTS = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
 
 
+def _cy_action_succeeded(controller, agent_name: str) -> bool | None:
+    obs_set = controller.observation.get(agent_name)
+    if obs_set is None:
+        return None
+    try:
+        obs = obs_set.get_combined_observation()
+    except Exception:
+        return None
+    success = getattr(obs, "success", None)
+    if success is None:
+        return None
+    return str(success).upper() == "TRUE"
+
+
 @jax.jit
 def _jit_fsm_red_get_action_and_info(state, const, agent_id, key):
     return fsm_red_get_action_and_info(state, const, jnp.int32(agent_id), key)
@@ -109,8 +128,12 @@ def _jit_fsm_red_post_step_update(state_before, state_after, const, target_hosts
 
 
 @jax.jit
-def _jit_green_and_reassign(state, const, key):
-    state = apply_green_agents(state, const, key)
+def _jit_apply_green(state, const, key):
+    return apply_green_agents(state, const, key)
+
+
+@jax.jit
+def _jit_reassign(state, const):
     return reassign_cross_subnet_sessions(state, const)
 
 
@@ -210,9 +233,11 @@ class CC4DifferentialHarness:
         )
 
         start_sessions = jnp.zeros_like(self.jax_state.red_sessions)
+        start_session_count = jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32)
         start_priv = jnp.zeros_like(self.jax_state.red_privilege)
         start_discovered = jnp.array(self.jax_const.red_initial_discovered_hosts)
         start_scanned = jnp.array(self.jax_const.red_initial_scanned_hosts)
+        start_scan_anchor = jnp.full((NUM_RED_AGENTS,), -1, dtype=jnp.int32)
         host_compromised = self.jax_state.host_compromised
         fsm_states = self.jax_state.fsm_host_states
         for agent_name, sessions in cyborg_state.sessions.items():
@@ -225,20 +250,32 @@ class CC4DifferentialHarness:
                 if sess.hostname in self.mappings.hostname_to_idx:
                     hidx = self.mappings.hostname_to_idx[sess.hostname]
                     start_sessions = start_sessions.at[red_idx, hidx].set(True)
+                    start_session_count = start_session_count.at[red_idx, hidx].add(1)
                     start_discovered = start_discovered.at[red_idx, hidx].set(True)
                     level = 1
                     if hasattr(sess, "username") and sess.username in ("root", "SYSTEM"):
                         level = 2
                     start_priv = start_priv.at[red_idx, hidx].set(jnp.maximum(start_priv[red_idx, hidx], level))
                     host_compromised = host_compromised.at[hidx].set(jnp.maximum(host_compromised[hidx], level))
+            if sessions:
+                primary = sessions.get(0)
+                if primary is None:
+                    primary = next(iter(sessions.values()))
+                if primary.hostname in self.mappings.hostname_to_idx:
+                    anchor_host = self.mappings.hostname_to_idx[primary.hostname]
+                    start_scan_anchor = start_scan_anchor.at[red_idx].set(anchor_host)
             if self.jax_const.red_agent_active[red_idx]:
                 fsm_states = fsm_states.at[red_idx].set(fsm_red_init_states(self.jax_const, red_idx))
 
         self.jax_state = self.jax_state.replace(
             red_sessions=start_sessions,
+            red_session_count=start_session_count,
+            red_session_multiple=start_session_count > 1,
+            red_session_many=start_session_count > 2,
             red_privilege=start_priv,
             red_discovered_hosts=start_discovered,
             red_scanned_hosts=start_scanned,
+            red_scan_anchor_host=start_scan_anchor,
             host_compromised=host_compromised,
             fsm_host_states=fsm_states,
         )
@@ -381,10 +418,6 @@ class CC4DifferentialHarness:
             for b, action_idx in blue_actions.items():
                 cyborg_actions[f"blue_agent_{b}"] = jax_blue_to_cyborg(action_idx, b, self.mappings)
 
-        for r, action_idx in red_actions.items():
-            aip = controller.actions_in_progress.get(f"red_agent_{r}")
-            if aip is None and action_idx != RED_SLEEP:
-                self._red_pending_jax[r] = (action_idx, subkeys[r])
         if blue_actions is not None:
             for b, action_idx in blue_actions.items():
                 aip = controller.actions_in_progress.get(f"blue_agent_{b}")
@@ -399,55 +432,91 @@ class CC4DifferentialHarness:
             green_randoms = self.jax_state.green_randoms.at[self.jax_state.time].set(jnp.array(step_fields))
             self.jax_state = self.jax_state.replace(green_randoms=green_randoms)
 
-        # --- JAX red actions (duration-aware) ---
-        for r in range(NUM_RED_AGENTS):
-            aip = controller.actions_in_progress.get(f"red_agent_{r}")
-            if aip is None and self._red_pending_jax[r] is not None:
-                action_idx, key = self._red_pending_jax[r]
-                self.jax_state = _jit_apply_red_action(self.jax_state, self.jax_const, r, action_idx, key)
-                self._red_pending_jax[r] = None
-
-        # --- JAX blue actions ---
-        if blue_actions is not None:
-            for b in range(NUM_BLUE_AGENTS):
-                aip = controller.actions_in_progress.get(f"blue_agent_{b}")
-                pending = self._blue_pending_jax[b]
-                if aip is None and pending is not None:
-                    self.jax_state = _jit_apply_blue_action(self.jax_state, self.jax_const, b, pending)
-                    self._blue_pending_jax[b] = None
-        else:
-            # Let CybORG blue agents pick actions, then replay the executed actions in JAX.
-            for b in range(NUM_BLUE_AGENTS):
-                agent_name = f"blue_agent_{b}"
+        def replay_red_actions() -> None:
+            # Duration-aware replay, driven by actual CybORG execution results.
+            for r in range(NUM_RED_AGENTS):
+                agent_name = f"red_agent_{r}"
                 aip = controller.actions_in_progress.get(agent_name)
-                pending = self._blue_pending_jax[b]
+                pending = self._red_pending_jax[r]
 
                 if aip is not None:
                     if pending is None:
                         try:
-                            self._blue_pending_jax[b] = cyborg_blue_to_jax(aip["action"], agent_name, self.mappings)
+                            action_idx = cyborg_red_to_jax(aip["action"], agent_name, self.mappings)
                         except ValueError:
-                            self._blue_pending_jax[b] = BLUE_SLEEP
+                            action_idx = RED_SLEEP
+                        if action_idx != RED_SLEEP:
+                            self._red_pending_jax[r] = (action_idx, subkeys[r])
                     continue
 
                 if pending is not None:
-                    if pending != BLUE_SLEEP:
-                        self.jax_state = _jit_apply_blue_action(self.jax_state, self.jax_const, b, pending)
-                    self._blue_pending_jax[b] = None
+                    succeeded = _cy_action_succeeded(controller, agent_name)
+                    if succeeded is False:
+                        self._red_pending_jax[r] = None
+                        continue
+                    action_idx, key = pending
+                    self.jax_state = _jit_apply_red_action(self.jax_state, self.jax_const, r, action_idx, key)
+                    self._red_pending_jax[r] = None
                     continue
 
                 executed = controller.action.get(agent_name, [])
                 if not executed:
                     continue
+                succeeded = _cy_action_succeeded(controller, agent_name)
+                if succeeded is False:
+                    continue
                 try:
-                    action_idx = cyborg_blue_to_jax(executed[0], agent_name, self.mappings)
+                    action_idx = cyborg_red_to_jax(executed[0], agent_name, self.mappings)
                 except ValueError:
-                    action_idx = BLUE_SLEEP
-                if action_idx != BLUE_SLEEP:
-                    self.jax_state = _jit_apply_blue_action(self.jax_state, self.jax_const, b, action_idx)
+                    action_idx = RED_SLEEP
+                if action_idx != RED_SLEEP:
+                    self.jax_state = _jit_apply_red_action(self.jax_state, self.jax_const, r, action_idx, subkeys[r])
 
-        # --- JAX green + reassign (JIT'd) ---
-        self.jax_state = _jit_green_and_reassign(self.jax_state, self.jax_const, key_green)
+        def replay_blue_actions() -> None:
+            if blue_actions is not None:
+                for b in range(NUM_BLUE_AGENTS):
+                    aip = controller.actions_in_progress.get(f"blue_agent_{b}")
+                    pending = self._blue_pending_jax[b]
+                    if aip is None and pending is not None:
+                        if pending != BLUE_SLEEP:
+                            self.jax_state = _jit_apply_blue_action(self.jax_state, self.jax_const, b, pending)
+                        self._blue_pending_jax[b] = None
+            else:
+                # Let CybORG blue agents pick actions, then replay executed actions.
+                for b in range(NUM_BLUE_AGENTS):
+                    agent_name = f"blue_agent_{b}"
+                    aip = controller.actions_in_progress.get(agent_name)
+                    pending = self._blue_pending_jax[b]
+
+                    if aip is not None:
+                        if pending is None:
+                            try:
+                                self._blue_pending_jax[b] = cyborg_blue_to_jax(aip["action"], agent_name, self.mappings)
+                            except ValueError:
+                                self._blue_pending_jax[b] = BLUE_SLEEP
+                        continue
+
+                    if pending is not None:
+                        if pending != BLUE_SLEEP:
+                            self.jax_state = _jit_apply_blue_action(self.jax_state, self.jax_const, b, pending)
+                        self._blue_pending_jax[b] = None
+                        continue
+
+                    executed = controller.action.get(agent_name, [])
+                    if not executed:
+                        continue
+                    try:
+                        action_idx = cyborg_blue_to_jax(executed[0], agent_name, self.mappings)
+                    except ValueError:
+                        action_idx = BLUE_SLEEP
+                    if action_idx != BLUE_SLEEP:
+                        self.jax_state = _jit_apply_blue_action(self.jax_state, self.jax_const, b, action_idx)
+
+        # Match CybORG action ordering: blue -> green -> red, then reassignment.
+        replay_blue_actions()
+        self.jax_state = _jit_apply_green(self.jax_state, self.jax_const, key_green)
+        replay_red_actions()
+        self.jax_state = _jit_reassign(self.jax_state, self.jax_const)
 
         # --- FSM state updates (shared with FsmRedCC4Env) ---
         if use_fsm:

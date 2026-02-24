@@ -55,6 +55,8 @@ Every test must compare JAX output against CybORG. Pattern:
 
 Test infrastructure lives in `tests/differential/` (harness, action translator, state comparator).
 
+Differential harness replay is strict-only: do not add CybORG->JAX state synchronization/patching to hide parity gaps.
+
 **Tests must exercise the training code path.** Differential tests should call the same functions used during training (`FsmRedCC4Env.step_env`, `apply_red_action`, `apply_green_agents`, `fsm_red_post_step_update`, etc.) rather than reimplementing logic in test code. Shared functions like `fsm_red_post_step_update` are extracted so both the training env and the differential harness use the same code. If a test needs custom orchestration (e.g. action duration tracking for CybORG parity), the JAX-side logic should still call into production functions.
 
 ### TDD + Differential Test Quality (Required)
