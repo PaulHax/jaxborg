@@ -1,6 +1,7 @@
 import numpy as np
 
 from jaxborg.constants import (
+    NUM_DECOY_TYPES,
     NUM_RED_AGENTS,
     NUM_SERVICES,
     NUM_SUBNETS,
@@ -8,6 +9,8 @@ from jaxborg.constants import (
 )
 from jaxborg.translate import CC4Mappings
 from tests.differential.harness import StateDiff, StateSnapshot
+
+_DECOY_SVC_TO_IDX = {"haraka": 0, "apache2": 1, "tomcat": 2, "vsftpd": 3}
 
 _ERROR_FIELDS = {
     "host_compromised",
@@ -333,10 +336,28 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings) -> list[StateDiff]:
     for h in malware_mismatch:
         diffs.append(StateDiff("host_has_malware", bool(cyborg_has_malware[h]), bool(jax_has_malware[h]), f"host_{h}"))
 
-    if np.any(jax_decoys):
-        for h in range(n):
-            if np.any(jax_decoys[h]):
-                diffs.append(StateDiff("host_decoys", None, tuple(bool(d) for d in jax_decoys[h]), f"host_{h}"))
+    cyborg_decoys = np.zeros((n, NUM_DECOY_TYPES), dtype=np.bool_)
+    from CybORG.Shared.Enums import DecoyType
+
+    for hostname, host in cyborg_state.hosts.items():
+        if hostname not in mappings.hostname_to_idx:
+            continue
+        hidx = mappings.hostname_to_idx[hostname]
+        for svc_name, svc in host.services.items():
+            if svc_name not in _DECOY_SVC_TO_IDX:
+                continue
+            pid = svc.process if hasattr(svc, "process") else svc.get("process")
+            if pid is None:
+                continue
+            proc = host.get_process(pid)
+            if proc is not None and proc.decoy_type & DecoyType.EXPLOIT:
+                cyborg_decoys[hidx, _DECOY_SVC_TO_IDX[svc_name]] = True
+
+    for h in range(n):
+        if not np.array_equal(cyborg_decoys[h], jax_decoys[h]):
+            cd = tuple(bool(d) for d in cyborg_decoys[h])
+            jd = tuple(bool(d) for d in jax_decoys[h])
+            diffs.append(StateDiff("host_decoys", cd, jd, f"host_{h}"))
 
     ot_stopped_mismatch = np.where(cyborg_ot_stopped != jax_ot_stopped)[0]
     for h in ot_stopped_mismatch:

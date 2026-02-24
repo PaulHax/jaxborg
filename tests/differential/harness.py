@@ -9,6 +9,8 @@ from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.duration import process_blue_with_duration, process_red_with_duration
 from jaxborg.actions.encoding import (
+    BLUE_DECOY_END,
+    BLUE_DECOY_START,
     BLUE_SLEEP,
     RED_SLEEP,
 )
@@ -445,7 +447,20 @@ class CC4DifferentialHarness:
             for b, action_idx in blue_actions.items():
                 cyborg_actions[f"blue_agent_{b}"] = jax_blue_to_cyborg(action_idx, b, self.mappings)
 
+        pre_services = {}
+        cy_state = controller.state
+        for hostname in cy_state.hosts:
+            pre_services[hostname] = set(cy_state.hosts[hostname].services.keys())
+
         controller.step(cyborg_actions)
+
+        new_services_by_host = {}
+        for hostname in cy_state.hosts:
+            added = set(cy_state.hosts[hostname].services.keys()) - pre_services.get(hostname, set())
+            if added:
+                new_services_by_host[hostname] = added
+
+        self._correct_pending_decoys(new_services_by_host)
 
         # --- Green RNG sync ---
         if self.green_recorder:
@@ -553,6 +568,35 @@ class CC4DifferentialHarness:
             return BLUE_SLEEP
 
         return cyborg_blue_to_jax(action, agent_name, self.mappings)
+
+    _SERVICE_TO_DECOY = {"haraka": 0, "apache2": 1, "tomcat": 2, "vsftpd": 3}
+
+    def _correct_pending_decoys(self, new_services_by_host):
+        for b in range(NUM_BLUE_AGENTS):
+            if int(self.jax_state.blue_pending_ticks[b]) != 1:
+                continue
+            pending_action = int(self.jax_state.blue_pending_action[b])
+            if not (BLUE_DECOY_START <= pending_action < BLUE_DECOY_END):
+                continue
+            offset = pending_action - BLUE_DECOY_START
+            target_host = offset % GLOBAL_MAX_HOSTS
+            hostname = self.mappings.idx_to_hostname.get(target_host)
+            new_svcs = new_services_by_host.get(hostname, set())
+            resolved_type = None
+            for svc_name in new_svcs:
+                if svc_name in self._SERVICE_TO_DECOY:
+                    resolved_type = self._SERVICE_TO_DECOY[svc_name]
+                    break
+            if resolved_type is not None:
+                correct_action = BLUE_DECOY_START + resolved_type * GLOBAL_MAX_HOSTS + target_host
+                self.jax_state = self.jax_state.replace(
+                    blue_pending_action=self.jax_state.blue_pending_action.at[b].set(correct_action)
+                )
+            else:
+                self.jax_state = self.jax_state.replace(
+                    blue_pending_ticks=self.jax_state.blue_pending_ticks.at[b].set(0),
+                    blue_pending_action=self.jax_state.blue_pending_action.at[b].set(BLUE_SLEEP),
+                )
 
     def run_episode(self, blue_policies=None, red_policy=None, max_steps=None) -> TestResult:
         max_steps = max_steps or self.max_steps
