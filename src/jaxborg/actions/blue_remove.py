@@ -8,7 +8,6 @@ from jaxborg.state import CC4Const, CC4State
 def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_host: int) -> CC4State:
     covers_host = const.blue_agent_hosts[agent_id, target_host]
     has_malware = state.host_has_malware[target_host]
-    has_live_suspicious = state.host_suspicious_process[target_host]
     blue_budget = state.blue_suspicious_pid_budget[agent_id, target_host]
     fallback_budget = jnp.sum(state.red_suspicious_process_count[:, target_host])
     start_budget = jnp.maximum(blue_budget, fallback_budget)
@@ -23,7 +22,10 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         count = new_session_count[r, target_host]
         is_user = new_privilege[r, target_host] == COMPROMISE_USER
         suspicious_count = new_suspicious_count[r, target_host]
-        should_clear = covers_host & has_malware & has_live_suspicious & is_user & (remaining_budget > 0)
+        has_valid_signal = (suspicious_count > 0) | (
+            (remaining_budget > count) & state.host_activity_detected[target_host]
+        )
+        should_clear = covers_host & has_malware & is_user & has_valid_signal & (remaining_budget > 0)
         remove_n = jnp.where(should_clear, jnp.minimum(count, remaining_budget), 0)
         max_removable = jnp.where(remaining_budget > count, count, suspicious_count)
         remove_n = jnp.minimum(remove_n, max_removable)
@@ -65,8 +67,10 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
     unique_stale_target = stale_session_hosts[:, target_host] & (jnp.sum(stale_session_hosts, axis=1) == 1)
     removed_target_session = (session_count_before[:, target_host] > 0) & (new_session_count[:, target_host] == 0)
     clear_scanned = cleared_all_sessions | (removed_target_session & unique_stale_target)
-    first_session_host = jnp.argmax(new_sessions & const.host_active[None, :], axis=1)
-    fallback_anchor = jnp.where(has_any_sessions_now, first_session_host, -1)
+    session_hosts = new_sessions & const.host_active[None, :]
+    last_session_from_end = jnp.argmax(jnp.flip(session_hosts, axis=1), axis=1)
+    last_session_host = new_session_count.shape[1] - 1 - last_session_from_end
+    fallback_anchor = jnp.where(has_any_sessions_now, last_session_host, -1)
     removed_anchor = cleared_all_sessions & (state.red_scan_anchor_host == target_host)
     red_scan_anchor_host = jnp.where(
         removed_anchor,

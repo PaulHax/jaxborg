@@ -71,8 +71,10 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     added_session_hosts = (session_counts == 0) & (red_session_count > 0)
     has_added_session = jnp.any(added_session_hosts, axis=1)
     first_added_host = jnp.argmax(added_session_hosts & const.host_active[None, :], axis=1)
-    first_session_host = jnp.argmax(red_sessions & const.host_active[None, :], axis=1)
-    fallback_anchor = jnp.where(has_added_session, first_added_host, first_session_host)
+    session_hosts = red_sessions & const.host_active[None, :]
+    last_session_from_end = jnp.argmax(jnp.flip(session_hosts, axis=1), axis=1)
+    last_session_host = red_sessions.shape[1] - 1 - last_session_from_end
+    fallback_anchor = jnp.where(has_added_session, first_added_host, last_session_host)
     fallback_anchor = jnp.where(has_any_sessions_now, fallback_anchor, -1)
     anchor_idx = jnp.clip(anchor, 0, red_sessions.shape[1] - 1)
     anchor_had_session = (anchor >= 0) & (session_counts[jnp.arange(NUM_RED_AGENTS), anchor_idx] > 0)

@@ -54,26 +54,17 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
     )
     stale_session_hosts = (session_counts > 0) & (state.red_suspicious_process_count == 0)
     unique_stale_target = stale_session_hosts[:, target_host] & (jnp.sum(stale_session_hosts, axis=1) == 1)
-    scanned_non_session_hosts = state.red_scanned_hosts & ~(session_counts > 0)
-    scanned_session_hosts = state.red_scanned_hosts & (session_counts > 0)
-    target_subnet_mask = const.host_subnet == const.host_subnet[target_host]
-    scanned_session_on_target_subnet = jnp.any(scanned_session_hosts & target_subnet_mask[None, :], axis=1)
-    removed_stale_with_remote_scan = (
-        covers_host
-        & stale_session_hosts[:, target_host]
-        & jnp.any(scanned_non_session_hosts, axis=1)
-        & scanned_session_on_target_subnet
-        & ~state.red_scanned_hosts[:, target_host]
-    )
-    removed_scanned_session = covers_host & (unique_stale_target | removed_stale_with_remote_scan)
+    removed_scanned_session = covers_host & unique_stale_target
     clear_scanned = cleared_all_sessions | removed_anchor_session | removed_scanned_session
     red_scanned_hosts = jnp.where(
         clear_scanned[:, None],
         jnp.zeros_like(state.red_scanned_hosts),
         state.red_scanned_hosts,
     )
-    first_session_host = jnp.argmax((red_session_count > 0) & const.host_active[None, :], axis=1)
-    fallback_anchor = jnp.where(has_any_sessions_now, first_session_host, -1)
+    session_hosts = (red_session_count > 0) & const.host_active[None, :]
+    last_session_from_end = jnp.argmax(jnp.flip(session_hosts, axis=1), axis=1)
+    last_session_host = red_session_count.shape[1] - 1 - last_session_from_end
+    fallback_anchor = jnp.where(has_any_sessions_now, last_session_host, -1)
     red_scan_anchor_host = jnp.where(
         cleared_all_sessions | removed_anchor_session,
         fallback_anchor,
