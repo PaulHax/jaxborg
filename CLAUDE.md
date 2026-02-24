@@ -6,6 +6,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 JAX port of CybORG CAGE Challenge 4 (CC4) — a multi-agent cybersecurity simulation (9 subnets, ~80 hosts, 5 blue agents, 6 red agents, 3 mission phases). Re-implements CC4 as JIT-compilable JAX arrays for GPU-accelerated parallel RL training via JaxMARL's `MultiAgentEnv` interface.
 
+## Worktree Layout
+
+This repo uses a bare-repo worktree setup:
+
+```
+jaxborg/
+  .bare/     ← bare git repo
+  .git       ← points to .bare
+  main/      ← worktree on main branch
+  parity/    ← worktree on parity branch
+```
+
+**When setting up a new worktree:**
+
+```bash
+cd /home/paulhax/src/cyber/jaxborg
+git worktree add <name> <branch>
+cd <name>
+uv sync
+```
+
+**Always be aware of which worktree you are working in.** Keep the specific worktree path in mind across conversations and when making plans — file paths, test commands, and commits all target a specific worktree. Reference the full worktree path (e.g. `/home/paulhax/src/cyber/jaxborg/parity/`) rather than just `jaxborg/` to avoid ambiguity.
+
 ## Commands
 
 ```bash
