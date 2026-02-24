@@ -112,6 +112,29 @@ BLUE_ACTION_TYPE_BLOCK_TRAFFIC = 6
 BLUE_ACTION_TYPE_ALLOW_TRAFFIC = 7
 
 
+RED_ACTION_DURATIONS = jnp.array(
+    #  Sleep Discover Scan  SSH  FTP  HTTP HTTPS Haraka SQL  EBlue BKeep PEsc Impact AggSc StlSc DcDec Degrd Withd
+    [1, 1, 1, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 1, 3, 2, 2, 1],
+    dtype=jnp.int32,
+)
+
+BLUE_ACTION_DURATIONS = jnp.array(
+    #  Sleep Monitor Analyse Remove Restore Decoy Block Allow
+    [1, 1, 2, 3, 5, 2, 1, 1],
+    dtype=jnp.int32,
+)
+
+
+def get_red_action_duration(action_idx: int, const: CC4Const) -> jnp.int32:
+    action_type, _, _ = decode_red_action(action_idx, 0, const)
+    return RED_ACTION_DURATIONS[action_type]
+
+
+def get_blue_action_duration(action_idx: int, const: CC4Const) -> jnp.int32:
+    action_type, _, _, _, _ = decode_blue_action(action_idx, 0, const)
+    return BLUE_ACTION_DURATIONS[action_type]
+
+
 def encode_red_action(action_name: str, target: int, agent_id: int) -> int:
     if action_name == "Sleep":
         return RED_SLEEP

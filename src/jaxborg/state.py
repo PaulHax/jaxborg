@@ -103,6 +103,16 @@ class CC4State:
     green_randoms: chex.Array  # (MAX_STEPS, GLOBAL_MAX_HOSTS, 7) float — precomputed green agent randoms
     use_green_randoms: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
 
+    red_pending_ticks: chex.Array  # (NUM_RED_AGENTS,) int32 — 0 = idle
+    red_pending_action: chex.Array  # (NUM_RED_AGENTS,) int32 — queued action index
+    red_pending_key: chex.Array  # (NUM_RED_AGENTS, 2) uint32 — stored RNG key
+
+    blue_pending_ticks: chex.Array  # (NUM_BLUE_AGENTS,) int32 — 0 = idle
+    blue_pending_action: chex.Array  # (NUM_BLUE_AGENTS,) int32 — queued action index
+
+    red_pending_fsm_action: chex.Array  # (NUM_RED_AGENTS,) int32 — stored FSM action type for deferred actions
+    red_pending_target_host: chex.Array  # (NUM_RED_AGENTS,) int32 — stored target host for deferred actions
+
 
 def create_initial_const() -> CC4Const:
     return CC4Const(
@@ -174,4 +184,11 @@ def create_initial_state() -> CC4State:
         use_detection_randoms=jnp.array(False),
         green_randoms=jnp.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=jnp.float32),
         use_green_randoms=jnp.array(False),
+        red_pending_ticks=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
+        red_pending_action=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
+        red_pending_key=jnp.zeros((NUM_RED_AGENTS, 2), dtype=jnp.uint32),
+        blue_pending_ticks=jnp.zeros(NUM_BLUE_AGENTS, dtype=jnp.int32),
+        blue_pending_action=jnp.zeros(NUM_BLUE_AGENTS, dtype=jnp.int32),
+        red_pending_fsm_action=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
+        red_pending_target_host=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
     )

@@ -59,10 +59,7 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
     unique_stale_target = stale_session_hosts[:, target_host] & (jnp.sum(stale_session_hosts, axis=1) == 1)
     scanned_hosts_count = jnp.sum(state.red_scanned_hosts, axis=1)
     removed_scanned_session = (
-        covers_host
-        & unique_stale_target
-        & state.red_scanned_hosts[:, target_host]
-        & (scanned_hosts_count == 1)
+        covers_host & unique_stale_target & state.red_scanned_hosts[:, target_host] & (scanned_hosts_count == 1)
     )
     anchor_idx = jnp.clip(state.red_scan_anchor_host, 0, red_session_count.shape[1] - 1)
     anchor_is_scanned = (state.red_scan_anchor_host >= 0) & state.red_scanned_hosts[

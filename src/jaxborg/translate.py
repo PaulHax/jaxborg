@@ -330,6 +330,10 @@ def cyborg_blue_to_jax(action, agent_name: str, mappings: CC4Mappings) -> int:
         host_idx = _host_idx_from_hostname(action.hostname, mappings)
         return encode_blue_action(encode_name, host_idx, aid)
 
+    if cls_name == "DeployDecoy":
+        host_idx = _host_idx_from_hostname(action.hostname, mappings)
+        return encode_blue_action("DeployDecoy_HarakaSMPT", host_idx, aid)
+
     if cls_name == "BlockTrafficZone":
         from_sid = CYBORG_SUFFIX_TO_ID[action.from_subnet]
         to_sid = CYBORG_SUFFIX_TO_ID[action.to_subnet]

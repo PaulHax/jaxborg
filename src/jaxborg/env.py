@@ -8,7 +8,7 @@ from flax import struct
 from jaxmarl.environments.multi_agent_env import MultiAgentEnv, State
 from jaxmarl.environments.spaces import Box, Discrete
 
-from jaxborg.actions import apply_blue_action, apply_red_action
+from jaxborg.actions.duration import process_blue_with_duration, process_red_with_duration
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, RED_WITHDRAW_END
 from jaxborg.actions.green import apply_green_agents
 from jaxborg.actions.masking import compute_blue_action_mask
@@ -182,14 +182,14 @@ class CC4Env(MultiAgentEnv):
         ot_before = state.ot_service_stopped
 
         for r in range(NUM_RED_AGENTS):
-            state = apply_red_action(state, const, r, actions[f"red_{r}"], red_keys[r])
+            state = process_red_with_duration(state, const, r, actions[f"red_{r}"], red_keys[r])
 
         impact_hosts = state.ot_service_stopped & ~ot_before
 
         state = apply_green_agents(state, const, key_green)
 
         for b in range(NUM_BLUE_AGENTS):
-            state = apply_blue_action(state, const, b, actions[f"blue_{b}"])
+            state = process_blue_with_duration(state, const, b, actions[f"blue_{b}"])
 
         state = reassign_cross_subnet_sessions(state, const)
 

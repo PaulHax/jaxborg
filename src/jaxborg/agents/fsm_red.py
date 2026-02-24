@@ -241,12 +241,14 @@ def fsm_red_post_step_update(
     target_hosts: list,
     fsm_actions: list,
     eligible_flags: list,
+    executed_flags: list | None = None,
 ) -> CC4State:
     fsm_states = state_after.fsm_host_states
 
     for r in range(NUM_RED_AGENTS):
         success = determine_fsm_success(state_before, state_after, r, target_hosts[r], fsm_actions[r])
-        skip = ~eligible_flags[r] | (fsm_actions[r] == FSM_ACT_DISCOVER_DECEPTION)
+        exec_flag = jnp.bool_(True) if executed_flags is None else executed_flags[r]
+        skip = ~eligible_flags[r] | ~exec_flag | (fsm_actions[r] == FSM_ACT_DISCOVER_DECEPTION)
         updated = fsm_red_update_state(fsm_states, const, r, target_hosts[r], fsm_actions[r], success)
         fsm_states = jnp.where(skip, fsm_states, updated)
 

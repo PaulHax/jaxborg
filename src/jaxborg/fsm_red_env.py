@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from jaxmarl.environments.multi_agent_env import MultiAgentEnv
 from jaxmarl.environments.spaces import Box, Discrete
 
-from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
+from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, RED_SLEEP
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.agents.fsm_red import (
     fsm_red_get_action_and_info,
@@ -79,23 +79,38 @@ class FsmRedCC4Env(MultiAgentEnv):
         red_keys = jax.random.split(key_red, NUM_RED_AGENTS)
 
         state_before = env_state.state
-
+        state = state_before
         red_actions = {}
         target_hosts = []
         fsm_actions = []
         eligible_flags = []
         for r in range(NUM_RED_AGENTS):
-            action, host, fsm_act, eligible = fsm_red_get_action_and_info(
-                env_state.state, env_state.const, r, red_keys[r]
+            is_busy = state.red_pending_ticks[r] > 0
+            action, host, fsm_act, eligible = jax.lax.cond(
+                is_busy,
+                lambda: (jnp.int32(RED_SLEEP), jnp.int32(0), jnp.int32(0), jnp.bool_(False)),
+                lambda: fsm_red_get_action_and_info(state, env_state.const, r, red_keys[r]),
             )
+            eff_host = jnp.where(is_busy, state.red_pending_target_host[r], host)
+            eff_fsm_act = jnp.where(is_busy, state.red_pending_fsm_action[r], fsm_act)
+            eff_eligible = jnp.where(is_busy, jnp.bool_(True), eligible)
+
             red_actions[f"red_{r}"] = action
-            target_hosts.append(host)
-            fsm_actions.append(fsm_act)
-            eligible_flags.append(eligible)
+            target_hosts.append(eff_host)
+            fsm_actions.append(eff_fsm_act)
+            eligible_flags.append(eff_eligible)
+
+            state = state.replace(
+                red_pending_fsm_action=state.red_pending_fsm_action.at[r].set(eff_fsm_act),
+                red_pending_target_host=state.red_pending_target_host.at[r].set(eff_host),
+            )
+        env_state = CC4EnvState(state=state, const=env_state.const)
 
         all_actions = {**blue_actions, **red_actions}
 
         obs, env_state, rewards, dones, info = self._env.step_env(key, env_state, all_actions)
+
+        executed_flags = [env_state.state.red_pending_ticks[r] == 0 for r in range(NUM_RED_AGENTS)]
 
         new_state = fsm_red_post_step_update(
             state_before,
@@ -104,6 +119,7 @@ class FsmRedCC4Env(MultiAgentEnv):
             target_hosts,
             fsm_actions,
             eligible_flags,
+            executed_flags,
         )
         env_state = CC4EnvState(state=new_state, const=env_state.const)
 
