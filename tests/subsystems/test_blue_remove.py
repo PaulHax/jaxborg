@@ -405,6 +405,119 @@ class TestDifferentialWithCybORG:
         assert int(new_state.red_privilege[0, target]) == COMPROMISE_NONE
         assert int(new_state.host_compromised[target]) == COMPROMISE_NONE
 
+    def test_remove_with_multi_pid_budget_and_malware_clears_user_session_without_live_suspicious_flag_matches_cyborg(
+        self, cyborg_and_jax
+    ):
+        cyborg_env, const, state = cyborg_and_jax
+        cyborg_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cyborg_state.hosts.keys())
+
+        target = _find_host_in_subnet(const, "OPERATIONAL_ZONE_B")
+        assert target is not None
+        target_hostname = sorted_hosts[target]
+
+        blue_idx = _find_blue_for_host(const, target)
+        assert blue_idx is not None
+
+        red_session = RedAbstractSession(
+            ident=None,
+            hostname=target_hostname,
+            username="user",
+            agent="red_agent_4",
+            parent=0,
+            session_type="shell",
+            pid=None,
+        )
+        cyborg_state.add_session(red_session)
+
+        cy_red_sess = next(s for s in cyborg_state.sessions["red_agent_4"].values() if s.hostname == target_hostname)
+        blue_parent = cyborg_state.sessions[f"blue_agent_{blue_idx}"][0]
+        blue_parent.add_sus_pids(hostname=target_hostname, pid=cy_red_sess.pid)
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[4, target].set(True),
+            red_privilege=state.red_privilege.at[4, target].set(COMPROMISE_USER),
+            host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
+            host_has_malware=state.host_has_malware.at[target].set(True),
+            host_suspicious_process=state.host_suspicious_process.at[target].set(False),
+            host_activity_detected=state.host_activity_detected.at[target].set(True),
+            red_suspicious_process_count=state.red_suspicious_process_count.at[4, target].set(0),
+            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(2),
+        )
+
+        remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
+        remove_action.duration = 1
+        cyborg_obs = remove_action.execute(cyborg_state)
+        assert cyborg_obs.success
+
+        action_idx = encode_blue_action("Remove", target, blue_idx)
+        new_state = apply_blue_action(state, const, blue_idx, action_idx)
+
+        cyborg_red_sessions = [
+            s for s in cyborg_state.sessions["red_agent_4"].values() if s.hostname == target_hostname
+        ]
+        cyborg_has_user_session = any(not s.has_privileged_access() for s in cyborg_red_sessions)
+
+        assert not cyborg_has_user_session
+        assert bool(new_state.red_sessions[4, target]) == cyborg_has_user_session
+        assert int(new_state.red_privilege[4, target]) == COMPROMISE_NONE
+        assert int(new_state.host_compromised[target]) == COMPROMISE_NONE
+
+    def test_remove_with_single_stale_budget_and_malware_does_not_clear_user_session_matches_cyborg(
+        self, cyborg_and_jax
+    ):
+        cyborg_env, const, state = cyborg_and_jax
+        cyborg_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cyborg_state.hosts.keys())
+
+        target = _find_host_in_subnet(const, "RESTRICTED_ZONE_A")
+        assert target is not None
+        target_hostname = sorted_hosts[target]
+
+        blue_idx = _find_blue_for_host(const, target)
+        assert blue_idx is not None
+
+        red_session = RedAbstractSession(
+            ident=None,
+            hostname=target_hostname,
+            username="user",
+            agent="red_agent_1",
+            parent=0,
+            session_type="shell",
+            pid=None,
+        )
+        cyborg_state.add_session(red_session)
+
+        blue_parent = cyborg_state.sessions[f"blue_agent_{blue_idx}"][0]
+        blue_parent.add_sus_pids(hostname=target_hostname, pid=999999)
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[1, target].set(True),
+            red_privilege=state.red_privilege.at[1, target].set(COMPROMISE_USER),
+            host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
+            host_has_malware=state.host_has_malware.at[target].set(True),
+            host_suspicious_process=state.host_suspicious_process.at[target].set(False),
+            host_activity_detected=state.host_activity_detected.at[target].set(True),
+            red_suspicious_process_count=state.red_suspicious_process_count.at[1, target].set(0),
+            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(1),
+        )
+
+        remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
+        remove_action.duration = 1
+        cyborg_obs = remove_action.execute(cyborg_state)
+        assert cyborg_obs.success
+
+        action_idx = encode_blue_action("Remove", target, blue_idx)
+        new_state = apply_blue_action(state, const, blue_idx, action_idx)
+
+        cyborg_red_sessions = [
+            s for s in cyborg_state.sessions["red_agent_1"].values() if s.hostname == target_hostname
+        ]
+        cyborg_has_user_session = any(not s.has_privileged_access() for s in cyborg_red_sessions)
+
+        assert cyborg_has_user_session
+        assert bool(new_state.red_sessions[1, target]) == cyborg_has_user_session
+
     def test_remove_clearing_last_session_clears_scanned_hosts_memory_matches_cyborg(self, cyborg_and_jax):
         cyborg_env, const, state = cyborg_and_jax
         cyborg_state = cyborg_env.environment_controller.state
