@@ -7,7 +7,6 @@ from jaxborg.state import CC4Const, CC4State
 
 def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_host: int) -> CC4State:
     covers_host = const.blue_agent_hosts[agent_id, target_host]
-    has_malware = state.host_has_malware[target_host]
     blue_budget = state.blue_suspicious_pid_budget[agent_id, target_host]
     fallback_budget = jnp.sum(state.red_suspicious_process_count[:, target_host])
     start_budget = jnp.maximum(blue_budget, fallback_budget)
@@ -22,10 +21,16 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         count = new_session_count[r, target_host]
         is_user = new_privilege[r, target_host] == COMPROMISE_USER
         suspicious_count = new_suspicious_count[r, target_host]
+        target_is_scanned = state.red_scanned_hosts[r, target_host]
         has_valid_signal = (suspicious_count > 0) | (
-            (remaining_budget > count) & state.host_activity_detected[target_host]
+            (remaining_budget > count)
+            & (
+                state.host_suspicious_process[target_host]
+                | (~target_is_scanned & state.host_activity_detected[target_host])
+                | (~state.host_has_malware[target_host] & target_is_scanned)
+            )
         )
-        should_clear = covers_host & has_malware & is_user & has_valid_signal & (remaining_budget > 0)
+        should_clear = covers_host & is_user & has_valid_signal & (remaining_budget > 0)
         remove_n = jnp.where(should_clear, jnp.minimum(count, remaining_budget), 0)
         max_removable = jnp.where(remaining_budget > count, count, suspicious_count)
         remove_n = jnp.minimum(remove_n, max_removable)
@@ -56,7 +61,7 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
 
     any_compromised = jnp.any(new_privilege[:, target_host] > 0)
     new_host_compromised = jnp.where(
-        covers_host & has_suspicious_process & has_malware & ~any_compromised,
+        covers_host & has_suspicious_process & ~any_compromised,
         state.host_compromised.at[target_host].set(COMPROMISE_NONE),
         state.host_compromised,
     )
