@@ -209,6 +209,140 @@ def test_cross_subnet_reassignment_does_not_overclear_existing_scan_memory_match
     assert jax_src_scanned == cy_src_scanned
 
 
+def test_cross_subnet_reassignment_keeps_remote_scan_memory_when_unrelated_session_moves_matches_cyborg():
+    env = _make_env(seed=0)
+    controller = env.environment_controller
+    cy_state = controller.state
+    const = build_const_from_cyborg(env)
+    mappings = build_mappings_from_cyborg(env)
+
+    source_agent = 0
+    target_idx, _ = _find_reassignment_case(const, source_agent)
+    assert target_idx is not None
+
+    base_session = cy_state.sessions[f"red_agent_{source_agent}"][0]
+    keep_host_idx = mappings.hostname_to_idx[base_session.hostname]
+    remote_scan_host = next(h for h in range(int(const.num_hosts)) if h not in {keep_host_idx, target_idx})
+    base_session.addport(mappings.hostname_to_ip[mappings.idx_to_hostname[remote_scan_host]], 22)
+
+    cy_state.add_session(
+        RedAbstractSession(
+            ident=None,
+            hostname=mappings.idx_to_hostname[target_idx],
+            username="user",
+            agent=f"red_agent_{source_agent}",
+            parent=0,
+            session_type="shell",
+            pid=None,
+        )
+    )
+    assert _cy_scanned_hosts(cy_state, mappings, source_agent) == {remote_scan_host}
+
+    jax_state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+    jax_state = jax_state.replace(
+        red_sessions=jax_state.red_sessions.at[source_agent, keep_host_idx]
+        .set(True)
+        .at[source_agent, target_idx]
+        .set(True),
+        red_privilege=jax_state.red_privilege.at[source_agent, keep_host_idx]
+        .set(COMPROMISE_USER)
+        .at[source_agent, target_idx]
+        .set(COMPROMISE_USER),
+        red_discovered_hosts=jax_state.red_discovered_hosts.at[source_agent, keep_host_idx]
+        .set(True)
+        .at[source_agent, target_idx]
+        .set(True),
+        red_scanned_hosts=jax_state.red_scanned_hosts.at[source_agent, remote_scan_host].set(True),
+        red_scan_anchor_host=jax_state.red_scan_anchor_host.at[source_agent].set(keep_host_idx),
+        host_compromised=jax_state.host_compromised.at[keep_host_idx]
+        .set(COMPROMISE_USER)
+        .at[target_idx]
+        .set(COMPROMISE_USER),
+    )
+
+    controller.different_subnet_agent_reassignment()
+    jax_after = reassign_cross_subnet_sessions(jax_state, const)
+
+    cy_src_scanned = _cy_scanned_hosts(cy_state, mappings, source_agent)
+    jax_src_scanned = {h for h in range(int(const.num_hosts)) if bool(jax_after.red_scanned_hosts[source_agent, h])}
+    assert cy_src_scanned == {remote_scan_host}
+    assert jax_src_scanned == cy_src_scanned
+
+
+def test_cross_subnet_reassignment_clears_remote_scan_memory_when_scan_owner_session_moves_matches_cyborg():
+    env = _make_env(seed=0)
+    controller = env.environment_controller
+    cy_state = controller.state
+    const = build_const_from_cyborg(env)
+    mappings = build_mappings_from_cyborg(env)
+
+    source_agent = 0
+    target_idx, _ = _find_reassignment_case(const, source_agent)
+    assert target_idx is not None
+    target_hostname = mappings.idx_to_hostname[target_idx]
+    source_sessions = cy_state.sessions[f"red_agent_{source_agent}"]
+    base_session = source_sessions[0]
+    old_base_host = base_session.hostname
+    cy_state.hosts[old_base_host].sessions[f"red_agent_{source_agent}"].remove(0)
+    base_session.hostname = target_hostname
+    cy_state.hosts[target_hostname].sessions[f"red_agent_{source_agent}"].append(0)
+    source_hosts = {mappings.hostname_to_idx[s.hostname] for s in source_sessions.values()}
+    remote_scan_host = next(h for h in range(int(const.num_hosts)) if h not in source_hosts)
+    base_session.addport(mappings.hostname_to_ip[mappings.idx_to_hostname[remote_scan_host]], 22)
+
+    # Keep multiple in-subnet stale sessions on the source agent so session
+    # removal is not a unique-host case.
+    retained_hosts = []
+    for h in range(int(const.num_hosts)):
+        if h == target_idx:
+            continue
+        if not bool(const.host_active[h]) or bool(const.host_is_router[h]):
+            continue
+        subnet_idx = int(const.host_subnet[h])
+        if not bool(const.red_agent_subnets[source_agent, subnet_idx]):
+            continue
+        if h in source_hosts:
+            continue
+        cy_state.add_session(
+            RedAbstractSession(
+                ident=None,
+                hostname=mappings.idx_to_hostname[h],
+                username="user",
+                agent=f"red_agent_{source_agent}",
+                parent=0,
+                session_type="shell",
+                pid=None,
+            )
+        )
+        retained_hosts.append(h)
+        if len(retained_hosts) == 2:
+            break
+    assert len(retained_hosts) == 2
+    assert _cy_scanned_hosts(cy_state, mappings, source_agent) == {remote_scan_host}
+
+    all_source_hosts = sorted(source_hosts | set(retained_hosts))
+    jax_state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+    for h in all_source_hosts:
+        jax_state = jax_state.replace(
+            red_sessions=jax_state.red_sessions.at[source_agent, h].set(True),
+            red_privilege=jax_state.red_privilege.at[source_agent, h].set(COMPROMISE_USER),
+            red_discovered_hosts=jax_state.red_discovered_hosts.at[source_agent, h].set(True),
+            host_compromised=jax_state.host_compromised.at[h].set(COMPROMISE_USER),
+        )
+    jax_state = jax_state.replace(
+        red_scanned_hosts=jax_state.red_scanned_hosts.at[source_agent, remote_scan_host].set(True),
+        red_scan_anchor_host=jax_state.red_scan_anchor_host.at[source_agent].set(target_idx),
+    )
+
+    controller.different_subnet_agent_reassignment()
+    jax_after = reassign_cross_subnet_sessions(jax_state, const)
+
+    cy_src_scanned = _cy_scanned_hosts(cy_state, mappings, source_agent)
+    jax_src_scanned = {h for h in range(int(const.num_hosts)) if bool(jax_after.red_scanned_hosts[source_agent, h])}
+    assert cy_src_scanned == set()
+    assert jax_src_scanned == cy_src_scanned
+
+
 def test_cross_subnet_reassignment_preserves_scan_anchor_host_matches_cyborg():
     env = _make_env(seed=0)
     controller = env.environment_controller
