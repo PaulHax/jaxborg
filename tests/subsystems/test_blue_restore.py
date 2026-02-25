@@ -1249,3 +1249,25 @@ class TestDifferentialWithCybORG:
         jax_scanned = {h for h in range(int(const.num_hosts)) if bool(new_state.red_scanned_hosts[2, h])}
         assert cy_scanned == {target, keep, remote}
         assert jax_scanned == cy_scanned
+
+
+class TestRestoreOnNonFoothold:
+    def test_restore_on_non_foothold_clears_sessions(self, jax_const):
+        state = _make_jax_state(jax_const)
+        target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A")
+        assert target is not None
+
+        blue_agent = _find_blue_for_host(jax_const, target)
+        assert blue_agent is not None
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[0, target].set(True),
+            red_privilege=state.red_privilege.at[0, target].set(COMPROMISE_USER),
+            host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
+        )
+
+        action = BLUE_RESTORE_START + target
+        state = _jit_apply_blue(state, jax_const, blue_agent, action)
+
+        assert int(state.red_sessions[0, target]) == 0
+        assert int(state.red_privilege[0, target]) == COMPROMISE_NONE

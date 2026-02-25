@@ -485,3 +485,29 @@ class TestDifferentialWithCybORG:
         jax_ot_after2 = bool(state2.host_services[target_h, OT_SVC])
 
         assert jax_ot_after2 == cyborg_ot_after2
+
+
+class TestImpactRequiresOperational:
+    def test_impact_fails_on_non_operational(self, jax_const):
+        state = create_initial_state()
+        state = state.replace(host_services=jnp.array(jax_const.initial_services))
+
+        non_operational = None
+        for h in range(int(jax_const.num_hosts)):
+            if not bool(jax_const.host_active[h]) or bool(jax_const.host_is_router[h]):
+                continue
+            if not bool(jax_const.initial_services[h, OT_SVC]):
+                non_operational = h
+                break
+        if non_operational is None:
+            pytest.skip("No non-operational host found")
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[0, non_operational].set(True),
+            red_privilege=state.red_privilege.at[0, non_operational].set(COMPROMISE_PRIVILEGED),
+            host_compromised=state.host_compromised.at[non_operational].set(COMPROMISE_PRIVILEGED),
+        )
+
+        action = RED_IMPACT_START + non_operational
+        state = _jit_apply_red(state, jax_const, 0, action, jax.random.PRNGKey(0))
+        assert not bool(state.ot_service_stopped[non_operational])

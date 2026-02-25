@@ -394,3 +394,17 @@ class TestDifferentialWithCybORG:
         state = apply_blue_monitor(state, const)
 
         assert int(state.red_activity_this_step[target_h]) == ACTIVITY_SCAN
+
+
+class TestMonitorActionMask:
+    def test_monitor_action_is_valid(self, jax_const):
+        from jaxborg.actions.masking import compute_blue_action_mask
+
+        mask = np.array(compute_blue_action_mask(jax_const, 0))
+        assert mask[BLUE_MONITOR]
+
+    def test_sleep_action_is_valid(self, jax_const):
+        from jaxborg.actions.masking import compute_blue_action_mask
+
+        mask = np.array(compute_blue_action_mask(jax_const, 0))
+        assert mask[BLUE_SLEEP]

@@ -181,3 +181,15 @@ class TestDecoyViaDispatch:
         action_idx = encode_blue_action("DeployDecoy_Tomcat", target, blue_idx)
         new_state = _jit_apply_blue(state, jax_const, blue_idx, action_idx)
         assert bool(new_state.host_decoys[target, TOMCAT_IDX])
+
+
+class TestBlueActionOrder:
+    def test_action_order_is_analyse_remove_restore_decoy(self):
+        from jaxborg.actions.encoding import (
+            BLUE_ANALYSE_START,
+            BLUE_DECOY_START,
+            BLUE_REMOVE_START,
+            BLUE_RESTORE_START,
+        )
+
+        assert BLUE_ANALYSE_START < BLUE_REMOVE_START < BLUE_RESTORE_START < BLUE_DECOY_START

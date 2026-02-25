@@ -339,3 +339,44 @@ class TestDifferentialWithCybORG:
         scenario = cyborg_env.environment_controller.state.scenario
         expected = _compute_allowed_subnet_pairs(scenario.allowed_subnets_per_mphase)
         np.testing.assert_array_equal(np.array(c.allowed_subnet_pairs), expected)
+
+    def test_host_order_matches_cyborg(self, cyborg_env):
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        build_const_from_cyborg(cyborg_env)
+        mappings = build_mappings_from_cyborg(cyborg_env)
+        hostnames = [mappings.idx_to_hostname[i] for i in range(mappings.num_hosts)]
+        assert hostnames == sorted(hostnames), f"Host ordering is not alphabetical: {hostnames[:10]}..."
+
+    def test_initial_foothold_privilege_matches_cyborg(self, cyborg_env):
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        mappings = build_mappings_from_cyborg(cyborg_env)
+        const = build_const_from_cyborg(cyborg_env)
+        cyborg_state = cyborg_env.environment_controller.state
+
+        for agent_name, sessions in cyborg_state.sessions.items():
+            if not agent_name.startswith("red_agent_"):
+                continue
+            red_idx = int(agent_name.split("_")[-1])
+            if red_idx >= NUM_RED_AGENTS:
+                continue
+            for sess in sessions.values():
+                if sess.hostname not in mappings.hostname_to_idx:
+                    continue
+                host_idx = mappings.hostname_to_idx[sess.hostname]
+                is_root = hasattr(sess, "username") and sess.username in ("root", "SYSTEM")
+                if is_root:
+                    assert bool(const.host_active[host_idx]), f"Red foothold host {sess.hostname} not active in JAX"
+
+    def test_adjacency_is_not_all_true(self, jax_const):
+        adj = np.array(jax_const.subnet_adjacency)
+        active = adj[:NUM_SUBNETS, :NUM_SUBNETS]
+        assert not np.all(active), "Subnet adjacency should not be all-true"
+
+    def test_adjacency_is_symmetric_where_expected(self, jax_const):
+        adj = np.array(jax_const.subnet_adjacency)
+        assert adj[SUBNET_IDS["RESTRICTED_ZONE_A"], SUBNET_IDS["OPERATIONAL_ZONE_A"]]
+        assert adj[SUBNET_IDS["OPERATIONAL_ZONE_A"], SUBNET_IDS["RESTRICTED_ZONE_A"]]

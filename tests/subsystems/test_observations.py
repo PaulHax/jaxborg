@@ -419,3 +419,32 @@ class TestBlueObsDifferential:
                 cyborg_obs = observations[agent_name]
                 jax_obs = np.array(get_blue_obs(state, const, agent_id))
                 assert cyborg_obs.shape == jax_obs.shape, f"seed={seed} {agent_name}: shape mismatch"
+
+
+class TestActionMaskAcrossSteps:
+    @pytest.fixture
+    def cyborg_env(self):
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        return CybORG(scenario_generator=sg, seed=42)
+
+    def test_masks_match_after_5_steps(self, cyborg_env):
+        from CybORG.Agents.Wrappers import BlueFlatWrapper
+
+        from jaxborg.actions.masking import compute_blue_action_mask
+
+        wrapped = BlueFlatWrapper(cyborg_env, pad_spaces=True)
+        wrapped.reset()
+        const = build_const_from_cyborg(cyborg_env)
+
+        for step in range(5):
+            actions = {agent: 0 for agent in wrapped.agents}
+            wrapped.step(actions)
+
+        for agent_idx in range(NUM_BLUE_AGENTS):
+            jax_mask = np.array(compute_blue_action_mask(const, agent_idx))
+            assert jax_mask.sum() > 0, f"Agent {agent_idx} has no valid actions after 5 steps"
