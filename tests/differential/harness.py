@@ -334,7 +334,7 @@ class CC4DifferentialHarness:
         agent_name = f"red_agent_{agent_id}"
         self.cyborg_env.step(agent=agent_name, action=cyborg_action)
 
-        self.jax_state = apply_red_action(self.jax_state, self.jax_const, agent_id, action_idx, subkey)
+        self.jax_state = _jit_apply_red_action(self.jax_state, self.jax_const, agent_id, action_idx, subkey)
 
         from tests.differential.state_comparator import (
             compare_snapshots,
@@ -353,7 +353,7 @@ class CC4DifferentialHarness:
         agent_name = f"blue_agent_{agent_id}"
         self.cyborg_env.step(agent=agent_name, action=cyborg_action)
 
-        self.jax_state = apply_blue_action(self.jax_state, self.jax_const, agent_id, action_idx)
+        self.jax_state = _jit_apply_blue_action(self.jax_state, self.jax_const, agent_id, action_idx)
 
         from tests.differential.state_comparator import (
             compare_snapshots,
@@ -380,10 +380,10 @@ class CC4DifferentialHarness:
         for agent_name, action_idx in actions.items():
             if agent_name.startswith("red_agent_"):
                 aid = _agent_idx(agent_name)
-                self.jax_state = apply_red_action(self.jax_state, self.jax_const, aid, action_idx, subkeys[aid])
+                self.jax_state = _jit_apply_red_action(self.jax_state, self.jax_const, aid, action_idx, subkeys[aid])
             else:
                 aid = _agent_idx(agent_name)
-                self.jax_state = apply_blue_action(self.jax_state, self.jax_const, aid, action_idx)
+                self.jax_state = _jit_apply_blue_action(self.jax_state, self.jax_const, aid, action_idx)
 
         from tests.differential.state_comparator import (
             compare_snapshots,

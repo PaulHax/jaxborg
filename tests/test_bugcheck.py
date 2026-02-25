@@ -47,6 +47,9 @@ from jaxborg.rewards import compute_rewards
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
 
+_jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
+_jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))
+
 pytestmark = pytest.mark.slow
 
 
@@ -278,7 +281,7 @@ class TestRemoveBehavior:
         )
 
         action = BLUE_REMOVE_START + target
-        state = apply_blue_action(state, const, blue_agent, action)
+        state = _jit_apply_blue(state, const, blue_agent, action)
 
         assert int(state.red_privilege[0, target]) == COMPROMISE_PRIVILEGED, (
             "Remove should NOT clear privileged access (CC2 BUG 8)"
@@ -310,7 +313,7 @@ class TestRestorePreservesFoothold:
         )
 
         action = BLUE_RESTORE_START + target
-        state = apply_blue_action(state, const, blue_agent, action)
+        state = _jit_apply_blue(state, const, blue_agent, action)
 
         assert int(state.red_sessions[0, target]) == 0, "Restore on non-foothold host should clear Red sessions"
         assert int(state.red_privilege[0, target]) == COMPROMISE_NONE, (
@@ -341,8 +344,8 @@ class TestExploitDeterminism:
         key1 = jax.random.PRNGKey(0)
         key2 = jax.random.PRNGKey(999)
 
-        state1 = apply_red_action(state, const, 0, action, key1)
-        state2 = apply_red_action(state, const, 0, action, key2)
+        state1 = _jit_apply_red(state, const, 0, action, key1)
+        state2 = _jit_apply_red(state, const, 0, action, key2)
 
         assert int(state1.host_compromised[target]) == int(state2.host_compromised[target]), (
             "Exploit result should not depend on RNG key (CC2 BUG 11: was probabilistic)"
@@ -383,7 +386,7 @@ class TestImpactRequiresOperational:
 
         action = RED_IMPACT_START + non_operational
         key = jax.random.PRNGKey(0)
-        state = apply_red_action(state, const, 0, action, key)
+        state = _jit_apply_red(state, const, 0, action, key)
 
         assert not bool(state.ot_service_stopped[non_operational]), (
             "Impact should fail on non-operational host (CC2 BUG 10)"
@@ -422,7 +425,7 @@ class TestExploitPrivilegeLevels:
 
         action = RED_EXPLOIT_HARAKA_START + target
         key = jax.random.PRNGKey(42)
-        state = apply_red_action(state, const, 0, action, key)
+        state = _jit_apply_red(state, const, 0, action, key)
 
         assert int(state.red_privilege[0, target]) == COMPROMISE_NONE, (
             f"HarakaRCE should not grant access on host {target} — "
@@ -468,7 +471,7 @@ class TestDecoyMechanics:
             pytest.skip("No blue agent covers host")
 
         action = BLUE_DECOY_START + target
-        state_after = apply_blue_action(state, const, blue_agent, action)
+        state_after = _jit_apply_blue(state, const, blue_agent, action)
 
         any_decoy_before = bool(np.any(np.array(state.host_decoys[target])))
         any_decoy_after = bool(np.any(np.array(state_after.host_decoys[target])))
