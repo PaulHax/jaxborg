@@ -13,16 +13,11 @@ from jaxborg.constants import (
 )
 from jaxborg.observations import SUBNET_BLOCK_SIZE, get_blue_obs
 from jaxborg.state import create_initial_state
-from jaxborg.topology import build_const_from_cyborg, build_topology
+from jaxborg.topology import build_const_from_cyborg
 
 OBS_SIZE = 210
 NUM_MESSAGES = 4
 MESSAGE_SECTION_SIZE = NUM_MESSAGES * MESSAGE_LENGTH
-
-
-@pytest.fixture
-def jax_const():
-    return build_topology(jnp.array([42]), num_steps=500)
 
 
 @pytest.fixture

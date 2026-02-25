@@ -33,14 +33,11 @@ from jaxborg.constants import (
     SERVICE_IDS,
 )
 from jaxborg.state import create_initial_state
-from jaxborg.topology import CYBORG_SUFFIX_TO_ID, build_topology
+from jaxborg.topology import CYBORG_SUFFIX_TO_ID
+
+_jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 
 SSH_SVC = SERVICE_IDS["SSHD"]
-
-
-@pytest.fixture
-def jax_const():
-    return build_topology(jnp.array([42]), num_steps=500)
 
 
 def _setup_exploited_state(jax_const, target_host):
@@ -54,15 +51,15 @@ def _setup_exploited_state(jax_const, target_host):
 
     target_subnet = int(jax_const.host_subnet[target_host])
     discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
-    state = apply_red_action(state, jax_const, 0, discover_idx, jax.random.PRNGKey(0))
+    state = _jit_apply_red(state, jax_const, 0, discover_idx, jax.random.PRNGKey(0))
     state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
     scan_idx = encode_red_action("DiscoverNetworkServices", target_host, 0)
-    state = apply_red_action(state, jax_const, 0, scan_idx, jax.random.PRNGKey(0))
+    state = _jit_apply_red(state, jax_const, 0, scan_idx, jax.random.PRNGKey(0))
     state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
     exploit_idx = encode_red_action("ExploitRemoteService_cc4SSHBruteForce", target_host, 0)
-    state = apply_red_action(state, jax_const, 0, exploit_idx, jax.random.PRNGKey(0))
+    state = _jit_apply_red(state, jax_const, 0, exploit_idx, jax.random.PRNGKey(0))
     state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
     return state
 
@@ -79,6 +76,14 @@ def _find_exploitable_host(jax_const, exclude_start=True):
                 continue
             return h
     return None
+
+
+@pytest.fixture(scope="module")
+def exploited_host(jax_const):
+    target = _find_exploitable_host(jax_const)
+    if target is None:
+        pytest.skip("No exploitable host found")
+    return _setup_exploited_state(jax_const, target), target
 
 
 class TestPrivescEncoding:
@@ -103,28 +108,20 @@ class TestPrivescEncoding:
 
 
 class TestApplyPrivesc:
-    def test_privesc_upgrades_to_privileged(self, jax_const):
-        target = _find_exploitable_host(jax_const)
-        if target is None:
-            pytest.skip("No exploitable host found")
-
-        state = _setup_exploited_state(jax_const, target)
+    def test_privesc_upgrades_to_privileged(self, jax_const, exploited_host):
+        state, target = exploited_host
         assert int(state.red_privilege[0, target]) == COMPROMISE_USER
 
         action_idx = encode_red_action("PrivilegeEscalate", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert int(new_state.red_privilege[0, target]) == COMPROMISE_PRIVILEGED
         assert int(new_state.host_compromised[target]) == COMPROMISE_PRIVILEGED
 
-    def test_privesc_sets_activity(self, jax_const):
-        target = _find_exploitable_host(jax_const)
-        if target is None:
-            pytest.skip("No exploitable host found")
-
-        state = _setup_exploited_state(jax_const, target)
+    def test_privesc_sets_activity(self, jax_const, exploited_host):
+        state, target = exploited_host
         action_idx = encode_red_action("PrivilegeEscalate", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert int(new_state.red_activity_this_step[target]) == ACTIVITY_EXPLOIT
 
     def test_privesc_fails_without_session(self, jax_const):
@@ -139,32 +136,24 @@ class TestApplyPrivesc:
         state = state.replace(red_sessions=red_sessions)
 
         action_idx = encode_red_action("PrivilegeEscalate", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert int(new_state.red_privilege[0, target]) == COMPROMISE_NONE
         assert int(new_state.host_compromised[target]) == COMPROMISE_NONE
 
-    def test_privesc_noop_when_already_privileged(self, jax_const):
-        target = _find_exploitable_host(jax_const)
-        if target is None:
-            pytest.skip("No exploitable host found")
-
-        state = _setup_exploited_state(jax_const, target)
+    def test_privesc_noop_when_already_privileged(self, jax_const, exploited_host):
+        state, target = exploited_host
         action_idx = encode_red_action("PrivilegeEscalate", target, 0)
-        state1 = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        state1 = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert int(state1.red_privilege[0, target]) == COMPROMISE_PRIVILEGED
 
         state1 = state1.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
-        state2 = apply_red_action(state1, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        state2 = _jit_apply_red(state1, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert int(state2.red_activity_this_step[target]) == ACTIVITY_NONE
 
-    def test_privesc_preserves_session(self, jax_const):
-        target = _find_exploitable_host(jax_const)
-        if target is None:
-            pytest.skip("No exploitable host found")
-
-        state = _setup_exploited_state(jax_const, target)
+    def test_privesc_preserves_session(self, jax_const, exploited_host):
+        state, target = exploited_host
         action_idx = encode_red_action("PrivilegeEscalate", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert bool(new_state.red_sessions[0, target])
 
     def test_privesc_discovers_host_info_links_on_success(self, jax_const):
@@ -182,17 +171,13 @@ class TestApplyPrivesc:
         assert not bool(state.red_discovered_hosts[0, linked_host])
 
         action_idx = encode_red_action("PrivilegeEscalate", target, 0)
-        new_state = apply_red_action(state, const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
         assert bool(new_state.red_discovered_hosts[0, linked_host])
 
-    def test_privesc_does_not_affect_other_agents(self, jax_const):
-        target = _find_exploitable_host(jax_const)
-        if target is None:
-            pytest.skip("No exploitable host found")
-
-        state = _setup_exploited_state(jax_const, target)
+    def test_privesc_does_not_affect_other_agents(self, jax_const, exploited_host):
+        state, target = exploited_host
         action_idx = encode_red_action("PrivilegeEscalate", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         for agent in range(1, NUM_RED_AGENTS):
             np.testing.assert_array_equal(
@@ -204,14 +189,10 @@ class TestApplyPrivesc:
                 np.array(state.red_privilege[agent]),
             )
 
-    def test_privesc_only_affects_target(self, jax_const):
-        target = _find_exploitable_host(jax_const)
-        if target is None:
-            pytest.skip("No exploitable host found")
-
-        state = _setup_exploited_state(jax_const, target)
+    def test_privesc_only_affects_target(self, jax_const, exploited_host):
+        state, target = exploited_host
         action_idx = encode_red_action("PrivilegeEscalate", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         for h in range(jax_const.num_hosts):
             if h == target:
@@ -219,12 +200,8 @@ class TestApplyPrivesc:
             assert int(new_state.red_privilege[0, h]) == int(state.red_privilege[0, h])
             assert int(new_state.host_compromised[h]) == int(state.host_compromised[h])
 
-    def test_jit_compatible(self, jax_const):
-        target = _find_exploitable_host(jax_const)
-        if target is None:
-            pytest.skip("No exploitable host found")
-
-        state = _setup_exploited_state(jax_const, target)
+    def test_jit_compatible(self, jax_const, exploited_host):
+        state, target = exploited_host
         action_idx = encode_red_action("PrivilegeEscalate", target, 0)
         jitted = jax.jit(apply_red_action, static_argnums=(2,))
         new_state = jitted(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
@@ -232,17 +209,13 @@ class TestApplyPrivesc:
 
 
 class TestPrivescChain:
-    def test_discover_scan_exploit_privesc_chain(self, jax_const):
-        target = _find_exploitable_host(jax_const)
-        if target is None:
-            pytest.skip("No exploitable host found")
-
-        state = _setup_exploited_state(jax_const, target)
+    def test_discover_scan_exploit_privesc_chain(self, jax_const, exploited_host):
+        state, target = exploited_host
         assert int(state.red_privilege[0, target]) == COMPROMISE_USER
         assert bool(state.red_sessions[0, target])
 
         privesc_idx = encode_red_action("PrivilegeEscalate", target, 0)
-        state = apply_red_action(state, jax_const, 0, privesc_idx, jax.random.PRNGKey(0))
+        state = _jit_apply_red(state, jax_const, 0, privesc_idx, jax.random.PRNGKey(0))
 
         assert int(state.red_privilege[0, target]) == COMPROMISE_PRIVILEGED
         assert int(state.host_compromised[target]) == COMPROMISE_PRIVILEGED
@@ -287,7 +260,7 @@ class TestDifferentialWithCybORG:
         cyborg_env.step(agent="red_agent_0", action=discover_action)
 
         discover_idx = encode_red_action("DiscoverRemoteSystems", sid, 0)
-        state = apply_red_action(state, const, 0, discover_idx, jax.random.PRNGKey(0))
+        state = _jit_apply_red(state, const, 0, discover_idx, jax.random.PRNGKey(0))
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
         discovered_jax = np.array(state.red_discovered_hosts[0])
@@ -318,7 +291,7 @@ class TestDifferentialWithCybORG:
         cyborg_env.step(agent="red_agent_0", action=scan_action)
 
         scan_idx = encode_red_action("DiscoverNetworkServices", target_h, 0)
-        state = apply_red_action(state, const, 0, scan_idx, jax.random.PRNGKey(0))
+        state = _jit_apply_red(state, const, 0, scan_idx, jax.random.PRNGKey(0))
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
         exploit_action = ExploitRemoteService(ip_address=target_ip, session=0, agent="red_agent_0")
@@ -327,7 +300,7 @@ class TestDifferentialWithCybORG:
         cyborg_exploit_success = cyborg_result.observation.get("success") == True  # noqa: E712
 
         exploit_idx = encode_red_action("ExploitRemoteService_cc4SSHBruteForce", target_h, 0)
-        state = apply_red_action(state, const, 0, exploit_idx, jax.random.PRNGKey(0))
+        state = _jit_apply_red(state, const, 0, exploit_idx, jax.random.PRNGKey(0))
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
         jax_exploit_success = bool(state.red_sessions[0, target_h])
@@ -346,7 +319,7 @@ class TestDifferentialWithCybORG:
         cyborg_success = cyborg_result.observation.get("success") == True  # noqa: E712
 
         privesc_idx = encode_red_action("PrivilegeEscalate", target_h, 0)
-        new_state = apply_red_action(state, const, 0, privesc_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, privesc_idx, jax.random.PRNGKey(0))
 
         jax_success = int(new_state.red_privilege[0, target_h]) == COMPROMISE_PRIVILEGED
 
@@ -377,7 +350,7 @@ class TestDifferentialWithCybORG:
         cyborg_env.step(agent="red_agent_0", action=privesc_action)
 
         privesc_idx = encode_red_action("PrivilegeEscalate", target_h, 0)
-        new_state = apply_red_action(state, const, 0, privesc_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, privesc_idx, jax.random.PRNGKey(0))
 
         sessions_after = [s for s in cyborg_state_obj.sessions["red_agent_0"].values() if s.hostname == target_hostname]
         cyborg_priv_after = any(s.has_privileged_access() for s in sessions_after)
@@ -413,7 +386,7 @@ class TestDifferentialWithCybORG:
         cyborg_success = cyborg_result.observation.get("success") == True  # noqa: E712
 
         privesc_idx = encode_red_action("PrivilegeEscalate", target_h, 0)
-        new_state = apply_red_action(state, const, 0, privesc_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, privesc_idx, jax.random.PRNGKey(0))
         jax_success = int(new_state.red_privilege[0, target_h]) >= COMPROMISE_PRIVILEGED
 
         assert not jax_success and not cyborg_success
@@ -446,7 +419,7 @@ class TestDifferentialWithCybORG:
         cyborg_env.step(agent="red_agent_0", action=privesc_action)
 
         privesc_idx = encode_red_action("PrivilegeEscalate", target_h, 0)
-        new_state = apply_red_action(state, const, 0, privesc_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, privesc_idx, jax.random.PRNGKey(0))
 
         action_space_after = cyborg_env.environment_controller.agent_interfaces["red_agent_0"].action_space
         known_after = {

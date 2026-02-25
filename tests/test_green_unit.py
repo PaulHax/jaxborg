@@ -14,12 +14,6 @@ from jaxborg.actions.green import (
 )
 from jaxborg.constants import GLOBAL_MAX_HOSTS, MAX_STEPS, NUM_GREEN_RANDOM_FIELDS, NUM_SERVICES
 from jaxborg.state import create_initial_state
-from jaxborg.topology import build_topology
-
-
-@pytest.fixture
-def jax_const():
-    return build_topology(jnp.array([42]), num_steps=500)
 
 
 @pytest.fixture

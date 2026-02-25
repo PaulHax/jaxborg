@@ -7,6 +7,8 @@ from jaxborg.constants import BLUE_OBS_SIZE, NUM_BLUE_AGENTS
 from jaxborg.env import CC4EnvState
 from jaxborg.fsm_red_env import FsmRedCC4Env
 
+pytestmark = pytest.mark.slow
+
 
 @pytest.fixture
 def env():

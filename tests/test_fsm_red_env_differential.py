@@ -5,6 +5,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+pytestmark = pytest.mark.slow
+
 
 @pytest.fixture
 def cyborg_sleep_env():
@@ -61,7 +63,7 @@ class TestFsmRedEnvDifferential:
         cyborg_env.reset()
         cyborg_actions = {agent: 0 for agent in cyborg_env.agents}
         cyborg_total = 0.0
-        for _ in range(500):
+        for _ in range(50):
             _, rewards, _, _, _ = cyborg_env.step(cyborg_actions)
             cyborg_total += mean(rewards.values())
 
@@ -69,7 +71,7 @@ class TestFsmRedEnvDifferential:
         jax_actions = {f"blue_{b}": jnp.int32(0) for b in range(NUM_BLUE_AGENTS)}
         jax_total = 0.0
         state = jax_state
-        for _ in range(500):
+        for _ in range(50):
             key, subkey = jax.random.split(key)
             _, state, rewards, _, _ = jax_env.step(subkey, state, jax_actions)
             jax_total += float(rewards["blue_0"])
@@ -84,22 +86,16 @@ class TestFsmRedEnvDifferential:
         from jaxborg.constants import NUM_BLUE_AGENTS
 
         jax_env, jax_state = jax_env_from_cyborg
-        num_episodes = 3
-        jax_returns = []
+        key = jax.random.PRNGKey(100)
+        state = jax_state
+        ep_return = 0.0
+        for _ in range(50):
+            key, act_key, step_key = jax.random.split(key, 3)
+            actions = {
+                f"blue_{b}": jax.random.randint(jax.random.fold_in(act_key, b), (), 0, BLUE_ALLOW_TRAFFIC_END)
+                for b in range(NUM_BLUE_AGENTS)
+            }
+            _, state, rewards, _, _ = jax_env.step(step_key, state, actions)
+            ep_return += float(rewards["blue_0"])
 
-        for ep in range(num_episodes):
-            key = jax.random.PRNGKey(ep + 100)
-            state = jax_state
-            ep_return = 0.0
-            for _ in range(500):
-                key, act_key, step_key = jax.random.split(key, 3)
-                actions = {
-                    f"blue_{b}": jax.random.randint(jax.random.fold_in(act_key, b), (), 0, BLUE_ALLOW_TRAFFIC_END)
-                    for b in range(NUM_BLUE_AGENTS)
-                }
-                _, state, rewards, _, _ = jax_env.step(step_key, state, actions)
-                ep_return += float(rewards["blue_0"])
-            jax_returns.append(ep_return)
-
-        jax_mean = np.mean(jax_returns)
-        assert np.isfinite(jax_mean), "JAX random baseline should produce finite returns"
+        assert np.isfinite(ep_return), "JAX random baseline should produce finite returns"

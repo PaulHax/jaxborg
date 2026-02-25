@@ -27,6 +27,8 @@ from jaxborg.constants import (
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
 
+_jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))
+
 
 def _make_cyborg_env():
     sg = EnterpriseScenarioGenerator(
@@ -227,7 +229,7 @@ class TestRestoreViaDispatch:
         assert blue_idx is not None
 
         action_idx = encode_blue_action("Restore", target, blue_idx)
-        new_state = apply_blue_action(state, jax_const, blue_idx, action_idx)
+        new_state = _jit_apply_blue(state, jax_const, blue_idx, action_idx)
         assert not bool(new_state.red_sessions[0, target])
         assert int(new_state.host_compromised[target]) == COMPROMISE_NONE
         assert not bool(new_state.host_has_malware[target])
@@ -300,7 +302,7 @@ class TestDifferentialWithCybORG:
         assert cy_obs.success
 
         action_idx = encode_blue_action("Restore", target, blue_idx)
-        new_state = apply_blue_action(state, const, blue_idx, action_idx)
+        new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cy_scanned = set()
         for sess in cy_state.sessions["red_agent_2"].values():
@@ -372,7 +374,7 @@ class TestDifferentialWithCybORG:
         assert cy_obs.success
 
         action_idx = encode_blue_action("Restore", target, blue_idx)
-        new_state = apply_blue_action(state, const, blue_idx, action_idx)
+        new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cy_scanned = set()
         for sess in cy_state.sessions["red_agent_2"].values():
@@ -456,7 +458,7 @@ class TestDifferentialWithCybORG:
         assert cy_obs.success
 
         action_idx = encode_blue_action("Restore", target, blue_idx)
-        new_state = apply_blue_action(state, const, blue_idx, action_idx)
+        new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cy_scanned = set()
         for sess in cy_state.sessions["red_agent_2"].values():
@@ -541,7 +543,7 @@ class TestDifferentialWithCybORG:
         assert cy_obs.success
 
         action_idx = encode_blue_action("Restore", target, blue_idx)
-        new_state = apply_blue_action(state, const, blue_idx, action_idx)
+        new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cy_scanned = set()
         for sess in cy_state.sessions["red_agent_1"].values():
@@ -624,7 +626,7 @@ class TestDifferentialWithCybORG:
         assert cy_obs.success
 
         action_idx = encode_blue_action("Restore", target, blue_idx)
-        new_state = apply_blue_action(state, const, blue_idx, action_idx)
+        new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cy_scanned = set()
         for sess in cy_state.sessions["red_agent_2"].values():
@@ -733,7 +735,7 @@ class TestDifferentialWithCybORG:
         assert cy_obs_1.success
 
         action_1 = encode_blue_action("Restore", target, blue_target)
-        state = apply_blue_action(state, const, blue_target, action_1)
+        state = _jit_apply_blue(state, const, blue_target, action_1)
 
         # CybORG promotes a new primary session when id=0 is removed; make this deterministic.
         cy_state.np_random = np.random.default_rng(0)
@@ -758,7 +760,7 @@ class TestDifferentialWithCybORG:
         assert cy_obs_2.success
 
         action_2 = encode_blue_action("Restore", promoted_now, blue_promoted)
-        new_state = apply_blue_action(state, const, blue_promoted, action_2)
+        new_state = _jit_apply_blue(state, const, blue_promoted, action_2)
 
         cy_scanned = set()
         for sess in cy_state.sessions["red_agent_2"].values():
@@ -833,7 +835,7 @@ class TestDifferentialWithCybORG:
         restore_1.duration = 1
         cy_obs_1 = restore_1.execute(cy_state)
         assert cy_obs_1.success
-        state = apply_blue_action(state, const, blue_target, encode_blue_action("Restore", target, blue_target))
+        state = _jit_apply_blue(state, const, blue_target, encode_blue_action("Restore", target, blue_target))
 
         # Deterministic primary-session promotion to id=0 after removing the original primary.
         cy_state.np_random = np.random.default_rng(0)
@@ -855,7 +857,7 @@ class TestDifferentialWithCybORG:
         cy_obs_2 = restore_2.execute(cy_state)
         assert cy_obs_2.success
 
-        new_state = apply_blue_action(
+        new_state = _jit_apply_blue(
             state, const, blue_promoted, encode_blue_action("Restore", promoted_now, blue_promoted)
         )
 
@@ -960,7 +962,7 @@ class TestDifferentialWithCybORG:
         cy_obs = restore_action.execute(cy_state)
         assert cy_obs.success
 
-        new_state = apply_blue_action(state, const, blue_target, encode_blue_action("Restore", target, blue_target))
+        new_state = _jit_apply_blue(state, const, blue_target, encode_blue_action("Restore", target, blue_target))
 
         cy_scanned = set()
         for sess in cy_state.sessions["red_agent_2"].values():
@@ -1035,7 +1037,7 @@ class TestDifferentialWithCybORG:
         cy_obs = restore_action.execute(cy_state)
         assert cy_obs.success
 
-        new_state = apply_blue_action(state, const, blue_target, encode_blue_action("Restore", target, blue_target))
+        new_state = _jit_apply_blue(state, const, blue_target, encode_blue_action("Restore", target, blue_target))
 
         cy_scanned = set()
         for sess in cy_state.sessions["red_agent_3"].values():
@@ -1129,7 +1131,7 @@ class TestDifferentialWithCybORG:
         cy_obs = restore_action.execute(cy_state)
         assert cy_obs.success
 
-        new_state = apply_blue_action(state, const, blue_idx, encode_blue_action("Restore", target, blue_idx))
+        new_state = _jit_apply_blue(state, const, blue_idx, encode_blue_action("Restore", target, blue_idx))
 
         cy_scanned = set()
         for sess in cy_state.sessions["red_agent_1"].values():
@@ -1235,7 +1237,7 @@ class TestDifferentialWithCybORG:
         cy_obs = restore_action.execute(cy_state)
         assert cy_obs.success
 
-        new_state = apply_blue_action(state, const, blue_idx, encode_blue_action("Restore", target, blue_idx))
+        new_state = _jit_apply_blue(state, const, blue_idx, encode_blue_action("Restore", target, blue_idx))
 
         cy_scanned = set()
         for sess in cy_state.sessions["red_agent_2"].values():

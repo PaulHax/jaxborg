@@ -22,11 +22,6 @@ from jaxborg.topology import build_topology
 
 
 @pytest.fixture
-def jax_const():
-    return build_topology(jnp.array([42]), num_steps=500)
-
-
-@pytest.fixture
 def jax_state(jax_const):
     state = create_initial_state()
     return state.replace(host_services=jax_const.initial_services)

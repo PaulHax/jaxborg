@@ -34,12 +34,9 @@ from jaxborg.constants import (
     SERVICE_IDS,
 )
 from jaxborg.state import create_initial_state
-from jaxborg.topology import build_const_from_cyborg, build_topology
+from jaxborg.topology import build_const_from_cyborg
 
-
-@pytest.fixture
-def jax_const():
-    return build_topology(jnp.array([42]), num_steps=500)
+_jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 
 
 @pytest.fixture
@@ -51,7 +48,7 @@ def jax_state_with_discovered(jax_const):
     state = state.replace(red_sessions=red_sessions, red_session_is_abstract=red_session_is_abstract)
     start_subnet = int(jax_const.host_subnet[start_host])
     discover_idx = encode_red_action("DiscoverRemoteSystems", start_subnet, 0)
-    state = apply_red_action(state, jax_const, 0, discover_idx, jax.random.PRNGKey(0))
+    state = _jit_apply_red(state, jax_const, 0, discover_idx, jax.random.PRNGKey(0))
     state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
     return state
 
@@ -93,7 +90,7 @@ class TestApplyAggressiveScan:
         )
 
         action_idx = encode_red_action("AggressiveServiceDiscovery", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert bool(new_state.red_scanned_hosts[0, target])
         assert int(new_state.red_activity_this_step[target]) == ACTIVITY_SCAN
@@ -110,7 +107,7 @@ class TestApplyAggressiveScan:
             pytest.skip("All hosts discovered")
 
         action_idx = encode_red_action("AggressiveServiceDiscovery", undiscovered, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert not bool(new_state.red_scanned_hosts[0, undiscovered])
 
     def test_jit_compatible(self, jax_const, jax_state_with_discovered):
@@ -148,7 +145,7 @@ class TestApplyStealthScan:
         )
 
         action_idx = encode_red_action("StealthServiceDiscovery", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert bool(new_state.red_scanned_hosts[0, target])
         assert int(new_state.red_activity_this_step[target]) == 0
@@ -194,7 +191,7 @@ class TestApplyDiscoverDeception:
         )
 
         action_idx = encode_red_action("DiscoverDeception", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert int(new_state.fsm_host_states[0, target]) == FSM_SD
 
@@ -215,7 +212,7 @@ class TestApplyDiscoverDeception:
         )
 
         action_idx = encode_red_action("DiscoverDeception", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert int(new_state.fsm_host_states[0, target]) == FSM_S
 
@@ -269,7 +266,7 @@ class TestApplyDegrade:
         )
 
         action_idx = encode_red_action("DegradeServices", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert int(new_state.red_activity_this_step[target]) == 2
 
@@ -288,7 +285,7 @@ class TestApplyDegrade:
         )
 
         action_idx = encode_red_action("DegradeServices", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert int(new_state.red_activity_this_step[target]) == 0
 
@@ -338,7 +335,7 @@ class TestApplyWithdraw:
         )
 
         action_idx = encode_red_action("Withdraw", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert not bool(new_state.red_sessions[0, target])
         assert int(new_state.red_privilege[0, target]) == COMPROMISE_NONE
@@ -350,7 +347,7 @@ class TestApplyWithdraw:
         assert target is not None
 
         action_idx = encode_red_action("Withdraw", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert not bool(new_state.red_sessions[0, target])
         assert int(new_state.red_privilege[0, target]) == COMPROMISE_NONE
@@ -365,7 +362,7 @@ class TestApplyWithdraw:
         state = state.replace(red_sessions=red_sessions)
 
         action_idx = encode_red_action("Withdraw", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert not bool(new_state.red_sessions[0, target])
         assert bool(new_state.red_sessions[1, target])
@@ -448,7 +445,7 @@ class TestDifferentialWithCybORG:
         assert cyborg_obs.success
 
         action_idx = encode_red_action("DegradeServices", target, 0)
-        new_state = apply_red_action(state, const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
 
         cyborg_active_reliability = None
         active_sid = None

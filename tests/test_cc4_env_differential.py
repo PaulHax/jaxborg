@@ -1,3 +1,8 @@
+import pytest
+
+pytestmark = pytest.mark.slow
+
+
 class TestCC4EnvDifferential:
     """Differential tests comparing JAX subsystems against CybORG."""
 

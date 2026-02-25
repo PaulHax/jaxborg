@@ -20,6 +20,8 @@ from jaxborg.constants import (
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_topology
 
+_jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
+
 SEEDS = [1, 7, 42, 100, 256, 999, 12345, 54321]
 
 
@@ -201,7 +203,7 @@ class TestActionHandlersRespectHostActive:
         state = state.replace(red_discovered_hosts=discovered, red_scanned_hosts=scanned)
 
         scan_idx = encode_red_action("DiscoverNetworkServices", inactive_host, 0)
-        new_state = apply_red_action(state, const, 0, scan_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, scan_idx, jax.random.PRNGKey(0))
         was_scanned = bool(state.red_scanned_hosts[0, inactive_host])
         assert not bool(new_state.red_scanned_hosts[0, inactive_host]) or was_scanned
 
@@ -214,7 +216,7 @@ class TestActionHandlersRespectHostActive:
 
         start_subnet = int(const.host_subnet[start_host])
         discover_idx = encode_red_action("DiscoverRemoteSystems", start_subnet, 0)
-        new_state = apply_red_action(state, const, 0, discover_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, discover_idx, jax.random.PRNGKey(0))
 
         discovered = np.array(new_state.red_discovered_hosts[0])
         for h in range(GLOBAL_MAX_HOSTS):

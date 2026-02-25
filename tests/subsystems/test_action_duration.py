@@ -16,7 +16,7 @@ from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS
 from jaxborg.env import CC4Env
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def env_and_state():
     key = jax.random.PRNGKey(42)
     env = CC4Env()
@@ -173,13 +173,19 @@ def _get_cyborg_remaining_ticks(controller, agent_name):
 class TestFsmRedEnvDurationTicks:
     """Test JAX-native duration tick tracking via FsmRedCC4Env (training code path)."""
 
-    def test_exploit_tick_countdown(self):
-        """Run FsmRedCC4Env until an exploit fires, verify tick countdown 3→2→1→0."""
+    @pytest.fixture(scope="class")
+    def fsm_env_and_state(self):
         from jaxborg.fsm_red_env import FsmRedCC4Env
 
         env = FsmRedCC4Env(num_steps=100)
         key = jax.random.PRNGKey(42)
         obs, env_state = env.reset(key)
+        return env, env_state
+
+    def test_exploit_tick_countdown(self, fsm_env_and_state):
+        """Run FsmRedCC4Env until an exploit fires, verify tick countdown 3→2→1→0."""
+        env, env_state = fsm_env_and_state
+        key = jax.random.PRNGKey(42)
 
         saw_exploit_countdown = False
         for step in range(100):
@@ -204,13 +210,10 @@ class TestFsmRedEnvDurationTicks:
 
         assert saw_exploit_countdown, "No exploit (duration=4) seen in 100 steps"
 
-    def test_blue_restore_tick_countdown(self):
+    def test_blue_restore_tick_countdown(self, fsm_env_and_state):
         """Submit Blue Restore via FsmRedCC4Env, verify ticks count 4→3→2→1→0."""
-        from jaxborg.fsm_red_env import FsmRedCC4Env
-
-        env = FsmRedCC4Env(num_steps=20)
-        key = jax.random.PRNGKey(42)
-        obs, env_state = env.reset(key)
+        env, env_state = fsm_env_and_state
+        key = jax.random.PRNGKey(43)
 
         active = env_state.const.host_active
         blue_hosts = env_state.const.blue_agent_hosts[0] & active
@@ -228,13 +231,10 @@ class TestFsmRedEnvDurationTicks:
 
         assert countdown == [4, 3, 2, 1, 0, 0], f"Expected [4,3,2,1,0,0], got {countdown}"
 
-    def test_busy_agent_pending_ticks_nonzero_across_steps(self):
+    def test_busy_agent_pending_ticks_nonzero_across_steps(self, fsm_env_and_state):
         """While red agent has pending exploit, new actions submitted are ignored."""
-        from jaxborg.fsm_red_env import FsmRedCC4Env
-
-        env = FsmRedCC4Env(num_steps=100)
-        key = jax.random.PRNGKey(42)
-        obs, env_state = env.reset(key)
+        env, env_state = fsm_env_and_state
+        key = jax.random.PRNGKey(44)
 
         actions = {f"blue_{b}": jnp.int32(BLUE_SLEEP) for b in range(NUM_BLUE_AGENTS)}
 

@@ -20,6 +20,8 @@ from jaxborg.constants import NUM_SUBNETS, SUBNET_IDS
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
 
+_jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))
+
 
 def _make_cyborg_env():
     sg = EnterpriseScenarioGenerator(
@@ -135,14 +137,14 @@ class TestTrafficViaDispatch:
     def test_block_dispatched(self, jax_const):
         state = _make_jax_state(jax_const)
         action_idx = encode_blue_action("BlockTrafficZone", -1, 0, src_subnet=SRC, dst_subnet=DST)
-        new_state = apply_blue_action(state, jax_const, 0, action_idx)
+        new_state = _jit_apply_blue(state, jax_const, 0, action_idx)
         assert bool(new_state.blocked_zones[DST, SRC])
 
     def test_allow_dispatched(self, jax_const):
         state = _make_jax_state(jax_const)
         state = state.replace(blocked_zones=state.blocked_zones.at[DST, SRC].set(True))
         action_idx = encode_blue_action("AllowTrafficZone", -1, 0, src_subnet=SRC, dst_subnet=DST)
-        new_state = apply_blue_action(state, jax_const, 0, action_idx)
+        new_state = _jit_apply_blue(state, jax_const, 0, action_idx)
         assert not bool(new_state.blocked_zones[DST, SRC])
 
 

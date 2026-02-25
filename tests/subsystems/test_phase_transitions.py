@@ -1,5 +1,4 @@
 import jax
-import jax.numpy as jnp
 import numpy as np
 import pytest
 from CybORG import CybORG
@@ -9,12 +8,6 @@ from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 from jaxborg.constants import MISSION_PHASES
 from jaxborg.rewards import advance_mission_phase
 from jaxborg.state import create_initial_state
-from jaxborg.topology import build_topology
-
-
-@pytest.fixture
-def jax_const():
-    return build_topology(jnp.array([42]), num_steps=500)
 
 
 class TestAdvanceMissionPhase:

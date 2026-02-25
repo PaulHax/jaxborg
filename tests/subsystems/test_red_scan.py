@@ -25,15 +25,12 @@ from jaxborg.constants import (
     NUM_SUBNETS,
 )
 from jaxborg.state import create_initial_state
-from jaxborg.topology import CYBORG_SUFFIX_TO_ID, build_topology
+from jaxborg.topology import CYBORG_SUFFIX_TO_ID
+
+_jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 
 
-@pytest.fixture
-def jax_const():
-    return build_topology(jnp.array([42]), num_steps=500)
-
-
-@pytest.fixture
+@pytest.fixture(scope="module")
 def jax_state_with_discovered(jax_const):
     state = create_initial_state()
     start_host = int(jax_const.red_start_hosts[0])
@@ -44,7 +41,7 @@ def jax_state_with_discovered(jax_const):
 
     start_subnet = int(jax_const.host_subnet[start_host])
     discover_idx = encode_red_action("DiscoverRemoteSystems", start_subnet, 0)
-    state = apply_red_action(state, jax_const, 0, discover_idx, jax.random.PRNGKey(0))
+    state = _jit_apply_red(state, jax_const, 0, discover_idx, jax.random.PRNGKey(0))
     state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
     return state
 
@@ -111,7 +108,7 @@ class TestApplyScan:
         assert target is not None
 
         action_idx = encode_red_action("DiscoverNetworkServices", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert bool(new_state.red_scanned_hosts[0, target])
 
@@ -121,7 +118,7 @@ class TestApplyScan:
         assert target is not None
 
         action_idx = encode_red_action("DiscoverNetworkServices", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert int(new_state.red_activity_this_step[target]) == ACTIVITY_SCAN
 
@@ -131,7 +128,7 @@ class TestApplyScan:
         assert target is not None
 
         action_idx = encode_red_action("DiscoverNetworkServices", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         for h in range(jax_const.num_hosts):
             if h != target:
@@ -149,7 +146,7 @@ class TestApplyScan:
             pytest.skip("All hosts discovered")
 
         action_idx = encode_red_action("DiscoverNetworkServices", undiscovered, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert not bool(new_state.red_scanned_hosts[0, undiscovered])
 
@@ -159,7 +156,7 @@ class TestApplyScan:
         state = state.replace(red_discovered_hosts=discovered)
 
         action_idx = encode_red_action("DiscoverNetworkServices", 5, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert not bool(new_state.red_scanned_hosts[0, 5])
 
@@ -169,8 +166,8 @@ class TestApplyScan:
         assert target is not None
 
         action_idx = encode_red_action("DiscoverNetworkServices", target, 0)
-        state1 = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
-        state2 = apply_red_action(state1, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        state1 = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        state2 = _jit_apply_red(state1, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         np.testing.assert_array_equal(
             np.array(state1.red_scanned_hosts),
             np.array(state2.red_scanned_hosts),
@@ -182,7 +179,7 @@ class TestApplyScan:
         assert target is not None
 
         action_idx = encode_red_action("DiscoverNetworkServices", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         for agent in range(1, NUM_RED_AGENTS):
             np.testing.assert_array_equal(
@@ -196,7 +193,7 @@ class TestApplyScan:
         assert target is not None
 
         action_idx = encode_red_action("DiscoverNetworkServices", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         np.testing.assert_array_equal(
             np.array(new_state.red_discovered_hosts),
@@ -216,7 +213,7 @@ class TestApplyScan:
         state_blocked = state.replace(blocked_zones=blocked)
 
         action_idx = encode_red_action("DiscoverNetworkServices", target, 0)
-        new_state = apply_red_action(state_blocked, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state_blocked, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert not bool(new_state.red_scanned_hosts[0, target])
 
@@ -268,7 +265,7 @@ class TestDifferentialWithCybORG:
         cyborg_env.step(agent="red_agent_0", action=discover_action)
 
         discover_idx = encode_red_action("DiscoverRemoteSystems", sid, 0)
-        state = apply_red_action(state, const, 0, discover_idx, jax.random.PRNGKey(0))
+        state = _jit_apply_red(state, const, 0, discover_idx, jax.random.PRNGKey(0))
 
         sorted_hosts = sorted(cyborg_state.hosts.keys())
         discovered_jax = np.array(state.red_discovered_hosts[0])
@@ -290,7 +287,7 @@ class TestDifferentialWithCybORG:
 
         scan_idx = encode_red_action("DiscoverNetworkServices", target_h, 0)
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
-        new_state = apply_red_action(state, const, 0, scan_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, scan_idx, jax.random.PRNGKey(0))
 
         assert bool(new_state.red_scanned_hosts[0, target_h]), (
             f"JAX should mark host {target_h} ({target_hostname}) as scanned"
@@ -323,14 +320,14 @@ class TestScanRequiresAbstractSession:
 
         # Discover hosts first
         discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, agent_id)
-        state = apply_red_action(state, const, agent_id, discover_idx, jax.random.PRNGKey(0))
+        state = _jit_apply_red(state, const, agent_id, discover_idx, jax.random.PRNGKey(0))
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
         target = _first_discovered_non_router(const, state, agent_id)
         assert target is not None, "Need at least one discovered host to scan"
 
         scan_idx = encode_red_action("DiscoverNetworkServices", target, agent_id)
-        new_state = apply_red_action(state, const, agent_id, scan_idx, jax.random.PRNGKey(1))
+        new_state = _jit_apply_red(state, const, agent_id, scan_idx, jax.random.PRNGKey(1))
 
         assert not bool(new_state.red_scanned_hosts[agent_id, target]), (
             "Scan must fail when agent has no abstract session (CybORG RedAbstractSession check)"
@@ -355,14 +352,14 @@ class TestScanRequiresAbstractSession:
 
         # Discover hosts
         discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, agent_id)
-        state = apply_red_action(state, const, agent_id, discover_idx, jax.random.PRNGKey(0))
+        state = _jit_apply_red(state, const, agent_id, discover_idx, jax.random.PRNGKey(0))
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
         target = _first_discovered_non_router(const, state, agent_id)
         assert target is not None
 
         scan_idx = encode_red_action("DiscoverNetworkServices", target, agent_id)
-        new_state = apply_red_action(state, const, agent_id, scan_idx, jax.random.PRNGKey(1))
+        new_state = _jit_apply_red(state, const, agent_id, scan_idx, jax.random.PRNGKey(1))
 
         assert bool(new_state.red_scanned_hosts[agent_id, target]), (
             "Scan should succeed when agent has an abstract session"
@@ -390,7 +387,7 @@ class TestScanRequiresAbstractSession:
         )
 
         discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, agent_id)
-        state = apply_red_action(state, const, agent_id, discover_idx, jax.random.PRNGKey(0))
+        state = _jit_apply_red(state, const, agent_id, discover_idx, jax.random.PRNGKey(0))
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
         target = _first_discovered_non_router(const, state, agent_id)

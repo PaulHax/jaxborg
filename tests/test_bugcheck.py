@@ -47,6 +47,8 @@ from jaxborg.rewards import compute_rewards
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
 
+pytestmark = pytest.mark.slow
+
 
 def _make_cyborg(seed=42, steps=500, blue_cls=SleepAgent, green_cls=SleepAgent, red_cls=SleepAgent):
     sg = EnterpriseScenarioGenerator(
@@ -56,6 +58,15 @@ def _make_cyborg(seed=42, steps=500, blue_cls=SleepAgent, green_cls=SleepAgent, 
         steps=steps,
     )
     return CybORG(scenario_generator=sg, seed=seed)
+
+
+_CONST_CACHE = {}
+
+
+def _get_const(seed=42):
+    if seed not in _CONST_CACHE:
+        _CONST_CACHE[seed] = build_const_from_cyborg(_make_cyborg(seed=seed))
+    return _CONST_CACHE[seed]
 
 
 def _make_jax_state(const):
@@ -170,7 +181,7 @@ class TestBlueActionEncoding:
 
     def test_decoy_decode_roundtrip(self):
         """Decoy action encode->decode must produce correct (host, decoy_type)."""
-        const = build_const_from_cyborg(_make_cyborg())
+        const = _get_const()
         for decoy_type in range(NUM_DECOY_TYPES):
             for host_offset in range(min(5, GLOBAL_MAX_HOSTS)):
                 action_idx = BLUE_DECOY_START + host_offset
@@ -194,7 +205,7 @@ class TestRedExploitEncoding:
     """CC2 BUG 28: Red exploit actions must correctly encode host and exploit type."""
 
     def test_ssh_exploit_targets_correct_host(self):
-        const = build_const_from_cyborg(_make_cyborg())
+        const = _get_const()
         for host in range(min(10, GLOBAL_MAX_HOSTS)):
             action_idx = RED_EXPLOIT_SSH_START + host
             action_type, _, target_host = decode_red_action(action_idx, 0, const)
@@ -203,7 +214,7 @@ class TestRedExploitEncoding:
             )
 
     def test_haraka_exploit_targets_correct_host(self):
-        const = build_const_from_cyborg(_make_cyborg())
+        const = _get_const()
         for host in range(min(10, GLOBAL_MAX_HOSTS)):
             action_idx = RED_EXPLOIT_HARAKA_START + host
             action_type, _, target_host = decode_red_action(action_idx, 0, const)
@@ -248,7 +259,7 @@ class TestRemoveBehavior:
     """CC2 BUG 8: Remove should NOT clear privileged access."""
 
     def test_remove_does_not_clear_privileged(self):
-        const = build_const_from_cyborg(_make_cyborg())
+        const = _get_const()
         state = _make_jax_state(const)
 
         target = _find_host_in_subnet(const, "RESTRICTED_ZONE_A")
@@ -281,7 +292,7 @@ class TestRestorePreservesFoothold:
     """CC2 BUG 9: Restore on initial foothold host should preserve Red's session."""
 
     def test_restore_on_non_foothold_clears_sessions(self):
-        const = build_const_from_cyborg(_make_cyborg())
+        const = _get_const()
         state = _make_jax_state(const)
 
         target = _find_host_in_subnet(const, "RESTRICTED_ZONE_A")
@@ -314,7 +325,7 @@ class TestExploitDeterminism:
     """CC2 BUGs 11, 12: Exploits should be deterministic (not random)."""
 
     def test_exploit_same_result_different_keys(self):
-        const = build_const_from_cyborg(_make_cyborg())
+        const = _get_const()
         state = _make_jax_state(const)
 
         target = _find_host_in_subnet(const, "RESTRICTED_ZONE_A")
@@ -348,7 +359,7 @@ class TestImpactRequiresOperational:
         from jaxborg.constants import SERVICE_IDS
 
         OTSERVICE_IDX = SERVICE_IDS["OTSERVICE"]
-        const = build_const_from_cyborg(_make_cyborg())
+        const = _get_const()
         state = _make_jax_state(const)
 
         non_operational = None
@@ -387,7 +398,7 @@ class TestExploitPrivilegeLevels:
 
     def test_haraka_does_not_grant_access(self):
         """In CC4, SMTP processes are always patched (HARAKA_2_8_9) so HarakaRCE never succeeds."""
-        const = build_const_from_cyborg(_make_cyborg())
+        const = _get_const()
         state = _make_jax_state(const)
 
         target = None
@@ -427,7 +438,7 @@ class TestRewardParity:
 
     def test_zero_reward_at_start(self):
         """With no compromise or impact, reward should be 0."""
-        const = build_const_from_cyborg(_make_cyborg())
+        const = _get_const()
         state = _make_jax_state(const)
 
         impact = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
@@ -445,7 +456,7 @@ class TestDecoyMechanics:
     """CC2 BUGs 16, 17, 23, 25: Decoy deployment and exploit-blocking."""
 
     def test_decoy_deployment_changes_state(self):
-        const = build_const_from_cyborg(_make_cyborg())
+        const = _get_const()
         state = _make_jax_state(const)
 
         target = _find_host_in_subnet(const, "RESTRICTED_ZONE_A")
@@ -474,14 +485,14 @@ class TestSubnetAdjacency:
     """CC2 BUG 29: Subnet adjacency must match CybORG NACL rules."""
 
     def test_adjacency_is_not_all_true(self):
-        const = build_const_from_cyborg(_make_cyborg())
+        const = _get_const()
         adj = np.array(const.subnet_adjacency)
         active = adj[:NUM_SUBNETS, :NUM_SUBNETS]
         assert not np.all(active), "Subnet adjacency should not be all-true (CC2 BUG 29: NACL parsing was wrong)"
 
     def test_adjacency_is_symmetric_where_expected(self):
         """Certain subnet pairs should be bidirectional (CC2 BUG 29 variant)."""
-        const = build_const_from_cyborg(_make_cyborg())
+        const = _get_const()
         adj = np.array(const.subnet_adjacency)
         from jaxborg.constants import SUBNET_IDS
 
@@ -501,12 +512,12 @@ class TestMonitorBehavior:
     """CC2 BUG 22: Monitor detection should happen at end of step."""
 
     def test_monitor_action_is_valid(self):
-        const = build_const_from_cyborg(_make_cyborg())
+        const = _get_const()
         mask = np.array(compute_blue_action_mask(const, 0))
         assert mask[BLUE_MONITOR], "Monitor action should be valid"
 
     def test_sleep_action_is_valid(self):
-        const = build_const_from_cyborg(_make_cyborg())
+        const = _get_const()
         mask = np.array(compute_blue_action_mask(const, 0))
         assert mask[BLUE_SLEEP], "Sleep action should be valid"
 

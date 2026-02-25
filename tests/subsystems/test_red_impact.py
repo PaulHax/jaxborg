@@ -28,15 +28,11 @@ from jaxborg.constants import (
     SERVICE_IDS,
 )
 from jaxborg.state import create_initial_state
-from jaxborg.topology import build_topology
+
+_jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 
 SSH_SVC = SERVICE_IDS["SSHD"]
 OT_SVC = SERVICE_IDS["OTSERVICE"]
-
-
-@pytest.fixture
-def jax_const():
-    return build_topology(jnp.array([42]), num_steps=500)
 
 
 def _setup_privileged_state(jax_const, target_host):
@@ -50,19 +46,19 @@ def _setup_privileged_state(jax_const, target_host):
 
     target_subnet = int(jax_const.host_subnet[target_host])
     discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
-    state = apply_red_action(state, jax_const, 0, discover_idx, jax.random.PRNGKey(0))
+    state = _jit_apply_red(state, jax_const, 0, discover_idx, jax.random.PRNGKey(0))
     state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
     scan_idx = encode_red_action("DiscoverNetworkServices", target_host, 0)
-    state = apply_red_action(state, jax_const, 0, scan_idx, jax.random.PRNGKey(0))
+    state = _jit_apply_red(state, jax_const, 0, scan_idx, jax.random.PRNGKey(0))
     state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
     exploit_idx = encode_red_action("ExploitRemoteService_cc4SSHBruteForce", target_host, 0)
-    state = apply_red_action(state, jax_const, 0, exploit_idx, jax.random.PRNGKey(0))
+    state = _jit_apply_red(state, jax_const, 0, exploit_idx, jax.random.PRNGKey(0))
     state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
     privesc_idx = encode_red_action("PrivilegeEscalate", target_host, 0)
-    state = apply_red_action(state, jax_const, 0, privesc_idx, jax.random.PRNGKey(0))
+    state = _jit_apply_red(state, jax_const, 0, privesc_idx, jax.random.PRNGKey(0))
     state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
     return state
@@ -96,6 +92,22 @@ def _find_non_ot_host(jax_const):
     return None
 
 
+@pytest.fixture(scope="module")
+def ot_host_privileged(jax_const):
+    target = _find_ot_host(jax_const)
+    if target is None:
+        pytest.skip("No OT host found")
+    return _setup_privileged_state(jax_const, target), target
+
+
+@pytest.fixture(scope="module")
+def non_ot_host_privileged(jax_const):
+    target = _find_non_ot_host(jax_const)
+    if target is None:
+        pytest.skip("No non-OT host found")
+    return _setup_privileged_state(jax_const, target), target
+
+
 class TestImpactEncoding:
     def test_impact_range_starts_after_privesc(self):
         assert RED_IMPACT_START == RED_PRIVESC_END
@@ -118,29 +130,21 @@ class TestImpactEncoding:
 
 
 class TestApplyImpact:
-    def test_impact_stops_ot_service(self, jax_const):
-        target = _find_ot_host(jax_const)
-        if target is None:
-            pytest.skip("No OT host found")
-
-        state = _setup_privileged_state(jax_const, target)
+    def test_impact_stops_ot_service(self, jax_const, ot_host_privileged):
+        state, target = ot_host_privileged
         assert int(state.red_privilege[0, target]) == COMPROMISE_PRIVILEGED
         assert bool(state.host_services[target, OT_SVC])
 
         action_idx = encode_red_action("Impact", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert not bool(new_state.host_services[target, OT_SVC])
         assert bool(new_state.ot_service_stopped[target])
 
-    def test_impact_sets_activity(self, jax_const):
-        target = _find_ot_host(jax_const)
-        if target is None:
-            pytest.skip("No OT host found")
-
-        state = _setup_privileged_state(jax_const, target)
+    def test_impact_sets_activity(self, jax_const, ot_host_privileged):
+        state, target = ot_host_privileged
         action_idx = encode_red_action("Impact", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert int(new_state.red_activity_this_step[target]) == ACTIVITY_EXPLOIT
 
     def test_impact_fails_without_privileged_access(self, jax_const):
@@ -157,7 +161,7 @@ class TestApplyImpact:
         state = state.replace(red_sessions=red_sessions, red_privilege=red_privilege)
 
         action_idx = encode_red_action("Impact", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert bool(new_state.host_services[target, OT_SVC])
         assert not bool(new_state.ot_service_stopped[target])
@@ -171,49 +175,37 @@ class TestApplyImpact:
         state = state.replace(host_services=jnp.array(jax_const.initial_services))
 
         action_idx = encode_red_action("Impact", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert bool(new_state.host_services[target, OT_SVC])
         assert not bool(new_state.ot_service_stopped[target])
 
-    def test_impact_fails_without_ot_service(self, jax_const):
-        target = _find_non_ot_host(jax_const)
-        if target is None:
-            pytest.skip("No non-OT host found")
-
-        state = _setup_privileged_state(jax_const, target)
+    def test_impact_fails_without_ot_service(self, jax_const, non_ot_host_privileged):
+        state, target = non_ot_host_privileged
         assert int(state.red_privilege[0, target]) == COMPROMISE_PRIVILEGED
         assert not bool(state.host_services[target, OT_SVC])
 
         action_idx = encode_red_action("Impact", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert not bool(new_state.ot_service_stopped[target])
         assert int(new_state.red_activity_this_step[target]) == ACTIVITY_NONE
 
-    def test_impact_noop_when_already_stopped(self, jax_const):
-        target = _find_ot_host(jax_const)
-        if target is None:
-            pytest.skip("No OT host found")
-
-        state = _setup_privileged_state(jax_const, target)
+    def test_impact_noop_when_already_stopped(self, jax_const, ot_host_privileged):
+        state, target = ot_host_privileged
         action_idx = encode_red_action("Impact", target, 0)
-        state1 = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        state1 = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert bool(state1.ot_service_stopped[target])
         assert not bool(state1.host_services[target, OT_SVC])
 
         state1 = state1.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
-        state2 = apply_red_action(state1, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        state2 = _jit_apply_red(state1, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert int(state2.red_activity_this_step[target]) == ACTIVITY_NONE
 
-    def test_impact_does_not_affect_other_agents(self, jax_const):
-        target = _find_ot_host(jax_const)
-        if target is None:
-            pytest.skip("No OT host found")
-
-        state = _setup_privileged_state(jax_const, target)
+    def test_impact_does_not_affect_other_agents(self, jax_const, ot_host_privileged):
+        state, target = ot_host_privileged
         action_idx = encode_red_action("Impact", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         for agent in range(1, NUM_RED_AGENTS):
             np.testing.assert_array_equal(
@@ -225,14 +217,10 @@ class TestApplyImpact:
                 np.array(state.red_privilege[agent]),
             )
 
-    def test_impact_only_affects_target(self, jax_const):
-        target = _find_ot_host(jax_const)
-        if target is None:
-            pytest.skip("No OT host found")
-
-        state = _setup_privileged_state(jax_const, target)
+    def test_impact_only_affects_target(self, jax_const, ot_host_privileged):
+        state, target = ot_host_privileged
         action_idx = encode_red_action("Impact", target, 0)
-        new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         for h in range(jax_const.num_hosts):
             if h == target:
@@ -240,12 +228,8 @@ class TestApplyImpact:
             assert bool(new_state.host_services[h, OT_SVC]) == bool(state.host_services[h, OT_SVC])
             assert bool(new_state.ot_service_stopped[h]) == bool(state.ot_service_stopped[h])
 
-    def test_jit_compatible(self, jax_const):
-        target = _find_ot_host(jax_const)
-        if target is None:
-            pytest.skip("No OT host found")
-
-        state = _setup_privileged_state(jax_const, target)
+    def test_jit_compatible(self, jax_const, ot_host_privileged):
+        state, target = ot_host_privileged
         action_idx = encode_red_action("Impact", target, 0)
         jitted = jax.jit(apply_red_action, static_argnums=(2,))
         new_state = jitted(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
@@ -254,18 +238,14 @@ class TestApplyImpact:
 
 
 class TestImpactChain:
-    def test_full_killchain_with_impact(self, jax_const):
-        target = _find_ot_host(jax_const)
-        if target is None:
-            pytest.skip("No OT host found")
-
-        state = _setup_privileged_state(jax_const, target)
+    def test_full_killchain_with_impact(self, jax_const, ot_host_privileged):
+        state, target = ot_host_privileged
         assert int(state.red_privilege[0, target]) == COMPROMISE_PRIVILEGED
         assert bool(state.red_sessions[0, target])
         assert bool(state.host_services[target, OT_SVC])
 
         impact_idx = encode_red_action("Impact", target, 0)
-        state = apply_red_action(state, jax_const, 0, impact_idx, jax.random.PRNGKey(0))
+        state = _jit_apply_red(state, jax_const, 0, impact_idx, jax.random.PRNGKey(0))
 
         assert not bool(state.host_services[target, OT_SVC])
         assert bool(state.ot_service_stopped[target])
@@ -275,21 +255,24 @@ class TestImpactChain:
 
 
 class TestDifferentialWithCybORG:
-    @pytest.fixture
-    def cyborg_env(self):
+    @pytest.fixture(scope="class")
+    def cyborg_env_and_const(self):
+        from jaxborg.topology import build_const_from_cyborg
+
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,
             green_agent_class=SleepAgent,
             red_agent_class=SleepAgent,
             steps=500,
         )
-        return CybORG(scenario_generator=sg, seed=42)
+        env = CybORG(scenario_generator=sg, seed=42)
+        const = build_const_from_cyborg(env)
+        return env, const
 
     @pytest.fixture
-    def cyborg_and_jax(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
-
-        const = build_const_from_cyborg(cyborg_env)
+    def cyborg_and_jax(self, cyborg_env_and_const):
+        cyborg_env, const = cyborg_env_and_const
+        cyborg_env.reset()
         state = create_initial_state()
         state = state.replace(host_services=jnp.array(const.initial_services))
         start_host = int(const.red_start_hosts[0])
@@ -355,7 +338,7 @@ class TestDifferentialWithCybORG:
         cyborg_success = cyborg_obs.success
 
         impact_idx = encode_red_action("Impact", target_h, 0)
-        new_state = apply_red_action(state, const, 0, impact_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, impact_idx, jax.random.PRNGKey(0))
 
         jax_stopped = bool(new_state.ot_service_stopped[target_h])
         jax_svc_off = not bool(new_state.host_services[target_h, OT_SVC])
@@ -385,7 +368,7 @@ class TestDifferentialWithCybORG:
         impact.execute(cyborg_state)
 
         impact_idx = encode_red_action("Impact", target_h, 0)
-        new_state = apply_red_action(state, const, 0, impact_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, impact_idx, jax.random.PRNGKey(0))
 
         cyborg_ot_after = any(
             svc.active for sname, svc in cyborg_host.services.items() if sname == ProcessName.OTSERVICE
@@ -408,7 +391,7 @@ class TestDifferentialWithCybORG:
         cyborg_success = cyborg_obs.success == True  # noqa: E712
 
         impact_idx = encode_red_action("Impact", target_h, 0)
-        new_state = apply_red_action(state, const, 0, impact_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, impact_idx, jax.random.PRNGKey(0))
         jax_stopped = bool(new_state.ot_service_stopped[target_h])
 
         assert not jax_stopped
@@ -429,7 +412,7 @@ class TestDifferentialWithCybORG:
         cyborg_success = cyborg_obs.success == True  # noqa: E712
 
         impact_idx = encode_red_action("Impact", target_h, 0)
-        new_state = apply_red_action(state, const, 0, impact_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, impact_idx, jax.random.PRNGKey(0))
         jax_stopped = bool(new_state.ot_service_stopped[target_h])
 
         assert not jax_stopped and not cyborg_success
@@ -463,7 +446,7 @@ class TestDifferentialWithCybORG:
         cyborg_success = cyborg_obs.success == True  # noqa: E712
 
         impact_idx = encode_red_action("Impact", target_h, 0)
-        new_state = apply_red_action(state, const, 0, impact_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, impact_idx, jax.random.PRNGKey(0))
         jax_stopped = bool(new_state.ot_service_stopped[target_h])
         jax_svc_still_on = bool(new_state.host_services[target_h, OT_SVC])
 
@@ -484,7 +467,7 @@ class TestDifferentialWithCybORG:
         assert cyborg_obs1.success
 
         impact_idx = encode_red_action("Impact", target_h, 0)
-        state = apply_red_action(state, const, 0, impact_idx, jax.random.PRNGKey(0))
+        state = _jit_apply_red(state, const, 0, impact_idx, jax.random.PRNGKey(0))
         assert bool(state.ot_service_stopped[target_h])
         assert not bool(state.host_services[target_h, OT_SVC])
 
@@ -492,7 +475,7 @@ class TestDifferentialWithCybORG:
 
         impact.execute(cyborg_state)
 
-        state2 = apply_red_action(state, const, 0, impact_idx, jax.random.PRNGKey(0))
+        state2 = _jit_apply_red(state, const, 0, impact_idx, jax.random.PRNGKey(0))
         bool(state2.host_services[target_h, OT_SVC]) != bool(state.host_services[target_h, OT_SVC])
 
         cyborg_host = cyborg_state.hosts[target_hostname]

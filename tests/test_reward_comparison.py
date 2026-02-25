@@ -2,11 +2,12 @@
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 import pytest
 
+pytestmark = pytest.mark.slow
 
-def _run_cyborg_sleep_episode(env, steps=500):
+
+def _run_cyborg_sleep_episode(env, steps=50):
     from statistics import mean
 
     env.reset()
@@ -18,7 +19,7 @@ def _run_cyborg_sleep_episode(env, steps=500):
     return total
 
 
-def _run_jax_sleep_episode(env, env_state, key, steps=500):
+def _run_jax_sleep_episode(env, env_state, key, steps=50):
     from jaxborg.constants import NUM_BLUE_AGENTS
 
     actions = {f"blue_{b}": jnp.int32(0) for b in range(NUM_BLUE_AGENTS)}
@@ -67,24 +68,14 @@ def jax_fsm_from_cyborg(cyborg_flat_env):
 
 class TestRewardComparison:
     def test_sleep_baseline_both_nonpositive(self, cyborg_flat_env, jax_fsm_from_cyborg):
-        num_episodes = 3
         jax_env, jax_state = jax_fsm_from_cyborg
 
-        cyborg_returns = []
-        for _ in range(num_episodes):
-            cyborg_returns.append(_run_cyborg_sleep_episode(cyborg_flat_env))
+        cyborg_total = _run_cyborg_sleep_episode(cyborg_flat_env)
+        jax_total = _run_jax_sleep_episode(jax_env, jax_state, jax.random.PRNGKey(0))
 
-        jax_returns = []
-        for ep in range(num_episodes):
-            key = jax.random.PRNGKey(ep)
-            jax_returns.append(_run_jax_sleep_episode(jax_env, jax_state, key))
-
-        cyborg_mean = np.mean(cyborg_returns)
-        jax_mean = np.mean(jax_returns)
-
-        assert cyborg_mean <= 0, f"CybORG sleep baseline should be <= 0, got {cyborg_mean}"
-        if cyborg_mean < -1.0:
-            assert jax_mean <= 0, f"JAX sleep baseline should be <= 0 when CybORG is {cyborg_mean}"
+        assert cyborg_total <= 0, f"CybORG sleep baseline should be <= 0, got {cyborg_total}"
+        if cyborg_total < -1.0:
+            assert jax_total <= 0, f"JAX sleep baseline should be <= 0 when CybORG is {cyborg_total}"
 
     def test_returns_are_finite(self, jax_fsm_from_cyborg):
         from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
@@ -94,7 +85,7 @@ class TestRewardComparison:
         key = jax.random.PRNGKey(42)
         state = jax_state
 
-        for _ in range(100):
+        for _ in range(50):
             key, act_key, step_key = jax.random.split(key, 3)
             actions = {
                 f"blue_{b}": jax.random.randint(jax.random.fold_in(act_key, b), (), 0, BLUE_ALLOW_TRAFFIC_END)

@@ -29,7 +29,6 @@ jaxmarl = { git = "https://github.com/FLAIROx/JaxMARL.git", branch = "main" }
 
 [dependency-groups]
 dev = [
-    "pytest-xdist>=3.8.0",
     "ruff",
 ]
 sb3 = [
@@ -40,7 +39,10 @@ sb3 = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-addopts = "-n 0"
+addopts = "-p no:xdist"
+markers = [
+    "slow: integration/smoke tests that don't need to run after every core logic change",
+]
 
 [tool.ruff]
 line-length = 120

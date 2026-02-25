@@ -14,12 +14,6 @@ from jaxborg.constants import (
 )
 from jaxborg.rewards import ASF, LWF, RIA, compute_rewards
 from jaxborg.state import create_initial_state
-from jaxborg.topology import build_topology
-
-
-@pytest.fixture
-def jax_const():
-    return build_topology(jnp.array([42]), num_steps=500)
 
 
 class TestPhaseRewardsPopulated:
@@ -94,7 +88,7 @@ class TestPhaseRewardsMatchCybORG:
                 assert jax_pr[phase, sid, RIA] == rewards["RIA"], f"phase={phase} subnet={cyborg_name} RIA mismatch"
 
     def test_pure_topology_matches_cyborg_topology(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.topology import build_const_from_cyborg, build_topology
 
         cyborg_const = build_const_from_cyborg(cyborg_env)
         pure_const = build_topology(jnp.array([42]), num_steps=500)

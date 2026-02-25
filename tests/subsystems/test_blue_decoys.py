@@ -23,6 +23,8 @@ from jaxborg.constants import (
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
 
+_jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))
+
 
 def _make_cyborg_env():
     sg = EnterpriseScenarioGenerator(
@@ -177,5 +179,5 @@ class TestDecoyViaDispatch:
         assert blue_idx is not None
 
         action_idx = encode_blue_action("DeployDecoy_Tomcat", target, blue_idx)
-        new_state = apply_blue_action(state, jax_const, blue_idx, action_idx)
+        new_state = _jit_apply_blue(state, jax_const, blue_idx, action_idx)
         assert bool(new_state.host_decoys[target, TOMCAT_IDX])

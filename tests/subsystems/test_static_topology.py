@@ -20,7 +20,6 @@ from jaxborg.topology import (
     CYBORG_SUFFIX_TO_ID,
     _compute_mission_phases,
     _subnet_nacl_adjacency,
-    build_topology,
 )
 
 
@@ -33,11 +32,6 @@ def cyborg_env():
         steps=500,
     )
     return CybORG(scenario_generator=sg, seed=42)
-
-
-@pytest.fixture
-def jax_const():
-    return build_topology(jnp.array([42]), num_steps=500)
 
 
 class TestPureToplogy:

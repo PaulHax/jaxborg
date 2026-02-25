@@ -33,12 +33,17 @@ uv sync
 
 ```bash
 uv sync                                              # install deps
-uv run pytest tests/ -v --ignore=tests/test_env_smoke.py  # all tests (skip slow CybORG smoke)
+uv run pytest tests/ -v -m "not slow" --ignore=tests/test_env_smoke.py  # fast tests only (~10 min)
+uv run pytest tests/ -v --ignore=tests/test_env_smoke.py  # all tests including slow integration
 uv run pytest tests/subsystems/test_red_discover.py -v     # single test file
 uv run pytest tests/subsystems/test_red_discover.py::TestClassName::test_name -v  # single test
 ```
 
 Training output goes to `../jaxborg-exp/`.
+
+**Do NOT use pytest-xdist (`-n auto`, `-n 4`, etc.).** Each worker loads JAX + CybORG into a separate process, which exhausts WSL memory and crashes the system. Always run tests serially.
+
+Tests marked `@pytest.mark.slow` are integration/smoke tests (full episode runs, JIT training, bugcheck catalog). Skip them during core logic iteration with `-m "not slow"`.
 
 ## Architecture
 

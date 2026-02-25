@@ -24,6 +24,9 @@ from jaxborg.constants import (
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
 
+_jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
+_jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))
+
 SSH_SVC = SERVICE_IDS["SSHD"]
 
 
@@ -196,12 +199,12 @@ class TestApplyBlueActionDispatch:
         assert blue_idx is not None
 
         action_idx = encode_blue_action("Analyse", target, blue_idx)
-        new_state = apply_blue_action(state, jax_const, blue_idx, action_idx)
+        new_state = _jit_apply_blue(state, jax_const, blue_idx, action_idx)
         assert bool(new_state.host_activity_detected[target])
 
     def test_sleep_still_noop(self, jax_const):
         state = _make_jax_state(jax_const)
-        new_state = apply_blue_action(state, jax_const, 0, 0)
+        new_state = _jit_apply_blue(state, jax_const, 0, 0)
         np.testing.assert_array_equal(
             np.array(new_state.host_activity_detected),
             np.array(state.host_activity_detected),
@@ -283,13 +286,13 @@ class TestDifferentialWithCybORG:
 
         target_subnet = int(const.host_subnet[target_h])
         discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
-        state = apply_red_action(state, const, 0, discover_idx, jax.random.PRNGKey(0))
+        state = _jit_apply_red(state, const, 0, discover_idx, jax.random.PRNGKey(0))
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
         scan_idx = encode_red_action("DiscoverNetworkServices", target_h, 0)
-        state = apply_red_action(state, const, 0, scan_idx, jax.random.PRNGKey(0))
+        state = _jit_apply_red(state, const, 0, scan_idx, jax.random.PRNGKey(0))
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
         exploit_idx = encode_red_action("ExploitRemoteService_cc4SSHBruteForce", target_h, 0)
-        state = apply_red_action(state, const, 0, exploit_idx, jax.random.PRNGKey(0))
+        state = _jit_apply_red(state, const, 0, exploit_idx, jax.random.PRNGKey(0))
 
         blue_idx = None
         for b in range(NUM_BLUE_AGENTS):

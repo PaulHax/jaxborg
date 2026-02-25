@@ -32,12 +32,6 @@ from jaxborg.agents.fsm_red import (
 )
 from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_RED_AGENTS
 from jaxborg.state import create_initial_state
-from jaxborg.topology import build_topology
-
-
-@pytest.fixture
-def jax_const():
-    return build_topology(jnp.array([42]), num_steps=500)
 
 
 class TestTransitionMatrices:
