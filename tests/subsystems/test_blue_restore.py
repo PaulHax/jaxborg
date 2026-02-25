@@ -1250,6 +1250,147 @@ class TestDifferentialWithCybORG:
         assert cy_scanned == {target, keep, remote}
         assert jax_scanned == cy_scanned
 
+    def test_restore_removing_stale_scan_owner_session_clears_scans_matches_cyborg(self, cyborg_and_jax):
+        cyborg_env, const, state = cyborg_and_jax
+        cy_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cy_state.hosts.keys())
+
+        subnet_hosts = []
+        base = _find_host_in_subnet(const, "OPERATIONAL_ZONE_B")
+        assert base is not None
+        subnet_id = int(const.host_subnet[base])
+        for h in range(int(const.num_hosts)):
+            if not bool(const.host_active[h]) or bool(const.host_is_router[h]):
+                continue
+            if int(const.host_subnet[h]) != subnet_id:
+                continue
+            subnet_hosts.append(h)
+            if len(subnet_hosts) == 4:
+                break
+        assert len(subnet_hosts) == 4
+        target, stale_anchor, nonstale_host, keep_host = subnet_hosts
+
+        remote_1 = _find_host_in_subnet(const, "RESTRICTED_ZONE_B")
+        remote_2 = _find_host_in_subnet(const, "RESTRICTED_ZONE_A")
+        assert remote_1 is not None and remote_2 is not None
+
+        target_hostname = sorted_hosts[target]
+        stale_anchor_hostname = sorted_hosts[stale_anchor]
+        nonstale_hostname = sorted_hosts[nonstale_host]
+        keep_hostname = sorted_hosts[keep_host]
+        remote_1_hostname = sorted_hosts[remote_1]
+        remote_2_hostname = sorted_hosts[remote_2]
+
+        blue_idx = _find_blue_for_host(const, target)
+        assert blue_idx is not None
+
+        for ident, hostname in (
+            (0, target_hostname),
+            (1, stale_anchor_hostname),
+            (2, nonstale_hostname),
+            (3, keep_hostname),
+        ):
+            cy_state.add_session(
+                RedAbstractSession(
+                    ident=ident,
+                    hostname=hostname,
+                    username="user",
+                    agent="red_agent_4",
+                    parent=0 if ident != 0 else None,
+                    session_type="shell",
+                    pid=None,
+                )
+            )
+
+        owner = cy_state.sessions["red_agent_4"][0]
+        owner.addport(next(ip for ip, host in cy_state.ip_addresses.items() if host == stale_anchor_hostname), 22)
+        owner.addport(next(ip for ip, host in cy_state.ip_addresses.items() if host == nonstale_hostname), 443)
+        owner.addport(next(ip for ip, host in cy_state.ip_addresses.items() if host == keep_hostname), 80)
+        owner.addport(next(ip for ip, host in cy_state.ip_addresses.items() if host == remote_1_hostname), 25)
+        owner.addport(next(ip for ip, host in cy_state.ip_addresses.items() if host == remote_2_hostname), 3390)
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[4, target]
+            .set(True)
+            .at[4, stale_anchor]
+            .set(True)
+            .at[4, nonstale_host]
+            .set(True)
+            .at[4, keep_host]
+            .set(True),
+            red_session_count=state.red_session_count.at[4, target]
+            .set(1)
+            .at[4, stale_anchor]
+            .set(1)
+            .at[4, nonstale_host]
+            .set(1)
+            .at[4, keep_host]
+            .set(1),
+            red_privilege=state.red_privilege.at[4, target]
+            .set(COMPROMISE_USER)
+            .at[4, stale_anchor]
+            .set(COMPROMISE_USER)
+            .at[4, nonstale_host]
+            .set(COMPROMISE_USER)
+            .at[4, keep_host]
+            .set(COMPROMISE_USER),
+            host_compromised=state.host_compromised.at[target]
+            .set(COMPROMISE_USER)
+            .at[stale_anchor]
+            .set(COMPROMISE_USER)
+            .at[nonstale_host]
+            .set(COMPROMISE_USER)
+            .at[keep_host]
+            .set(COMPROMISE_USER),
+            red_scanned_hosts=state.red_scanned_hosts.at[4, stale_anchor]
+            .set(True)
+            .at[4, nonstale_host]
+            .set(True)
+            .at[4, keep_host]
+            .set(True)
+            .at[4, remote_1]
+            .set(True)
+            .at[4, remote_2]
+            .set(True),
+            red_scanned_via=state.red_scanned_via.at[4, stale_anchor]
+            .set(target)
+            .at[4, nonstale_host]
+            .set(target)
+            .at[4, keep_host]
+            .set(target)
+            .at[4, remote_1]
+            .set(target)
+            .at[4, remote_2]
+            .set(target),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[4].set(stale_anchor),
+            red_suspicious_process_count=state.red_suspicious_process_count.at[4, target]
+            .set(0)
+            .at[4, stale_anchor]
+            .set(0)
+            .at[4, nonstale_host]
+            .set(1)
+            .at[4, keep_host]
+            .set(0),
+        )
+
+        restore_action = Restore(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
+        restore_action.duration = 1
+        cy_obs = restore_action.execute(cy_state)
+        assert cy_obs.success
+
+        new_state = _jit_apply_blue(state, const, blue_idx, encode_blue_action("Restore", target, blue_idx))
+
+        cy_scanned = set()
+        for sess in cy_state.sessions["red_agent_4"].values():
+            for ip in getattr(sess, "ports", {}).keys():
+                host = cy_state.ip_addresses.get(ip)
+                if host is not None:
+                    cy_scanned.add(sorted_hosts.index(host))
+
+        jax_scanned = {h for h in range(int(const.num_hosts)) if bool(new_state.red_scanned_hosts[4, h])}
+        assert cy_scanned == set()
+        assert jax_scanned == cy_scanned
+
 
 class TestRestoreOnNonFoothold:
     def test_restore_on_non_foothold_clears_sessions(self, jax_const):
