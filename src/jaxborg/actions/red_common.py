@@ -126,12 +126,6 @@ def apply_exploit_success(
         state.blue_suspicious_pid_budget.at[:, target_host].add(blue_budget_inc),
         state.blue_suspicious_pid_budget,
     )
-    red_session_is_abstract = jnp.where(
-        success,
-        state.red_session_is_abstract.at[agent_id, target_host].set(True),
-        state.red_session_is_abstract,
-    )
-
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
@@ -144,5 +138,4 @@ def apply_exploit_success(
         host_suspicious_process=host_suspicious_process,
         red_activity_this_step=activity,
         blue_suspicious_pid_budget=blue_suspicious_pid_budget,
-        red_session_is_abstract=red_session_is_abstract,
     )

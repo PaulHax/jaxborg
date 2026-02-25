@@ -367,3 +367,38 @@ class TestScanRequiresAbstractSession:
         assert bool(new_state.red_scanned_hosts[agent_id, target]), (
             "Scan should succeed when agent has an abstract session"
         )
+
+    def test_exploit_does_not_grant_abstract_session(self):
+        """CybORG ExploitAction creates plain Session, not RedAbstractSession.
+
+        If blue kills the abstract session, the agent should lose scan/exploit
+        ability even if exploit-created sessions remain.
+        """
+        from jaxborg.actions.red_common import apply_exploit_success
+        from jaxborg.topology import build_topology
+
+        const = build_topology(jnp.array([42]), num_steps=500)
+        state = create_initial_state()
+
+        agent_id = 0
+        start_host = int(const.red_start_hosts[agent_id])
+        target_subnet = int(const.host_subnet[start_host])
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[agent_id, start_host].set(True),
+            red_session_is_abstract=state.red_session_is_abstract.at[agent_id, start_host].set(True),
+        )
+
+        discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, agent_id)
+        state = apply_red_action(state, const, agent_id, discover_idx, jax.random.PRNGKey(0))
+        state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
+
+        target = _first_discovered_non_router(const, state, agent_id)
+        assert target is not None
+
+        new_state = apply_exploit_success(state, const, agent_id, target, success=jnp.bool_(True))
+
+        assert bool(new_state.red_sessions[agent_id, target]), "Exploit should create session on target"
+        assert not bool(new_state.red_session_is_abstract[agent_id, target]), (
+            "Exploit-created sessions must NOT be abstract (CybORG creates plain Session, not RedAbstractSession)"
+        )

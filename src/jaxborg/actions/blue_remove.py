@@ -34,6 +34,10 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         remove_n = jnp.where(should_clear, jnp.minimum(count, remaining_budget), 0)
         max_removable = jnp.where(remaining_budget > count, count, suspicious_count)
         remove_n = jnp.minimum(remove_n, max_removable)
+        has_abstract = state.red_session_is_abstract[r, target_host]
+        non_abstract_count = count - has_abstract.astype(jnp.int32)
+        abstract_safe = has_abstract & (non_abstract_count > 0) & (remove_n > non_abstract_count)
+        remove_n = jnp.where(abstract_safe, non_abstract_count, remove_n)
         remaining_budget = jnp.maximum(remaining_budget - remove_n, 0)
         count_after = jnp.maximum(count - remove_n, 0)
         new_session_count = jnp.where(
@@ -68,10 +72,12 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
     had_any_sessions = jnp.any(session_count_before > 0, axis=1)
     has_any_sessions_now = jnp.any(new_session_count > 0, axis=1)
     cleared_all_sessions = had_any_sessions & ~has_any_sessions_now
-    stale_session_hosts = (session_count_before > 0) & (state.red_suspicious_process_count == 0)
-    unique_stale_target = stale_session_hosts[:, target_host] & (jnp.sum(stale_session_hosts, axis=1) == 1)
-    removed_target_session = (session_count_before[:, target_host] > 0) & (new_session_count[:, target_host] == 0)
-    clear_scanned = cleared_all_sessions | (removed_target_session & unique_stale_target)
+    sessions_lost_on_target = (session_count_before[:, target_host] > 0) & (new_session_count[:, target_host] == 0)
+    via_target = state.red_scanned_via == jnp.int32(target_host)
+    via_clear = sessions_lost_on_target[:, None] & via_target
+    full_clear = cleared_all_sessions[:, None]
+    new_scanned_hosts = state.red_scanned_hosts & ~(full_clear | via_clear)
+    new_scanned_via = jnp.where(full_clear | via_clear, -1, state.red_scanned_via)
     session_hosts = new_sessions & const.host_active[None, :]
     last_session_from_end = jnp.argmax(jnp.flip(session_hosts, axis=1), axis=1)
     last_session_host = new_session_count.shape[1] - 1 - last_session_from_end
@@ -83,11 +89,6 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         state.red_scan_anchor_host,
     )
     red_scan_anchor_host = jnp.where(has_any_sessions_now, red_scan_anchor_host, -1)
-    new_scanned_hosts = jnp.where(
-        clear_scanned[:, None],
-        jnp.zeros_like(state.red_scanned_hosts),
-        state.red_scanned_hosts,
-    )
     any_suspicious_after = jnp.any(new_suspicious_count[:, target_host] > 0)
     new_suspicious_process = jnp.where(
         covers_host,
@@ -112,6 +113,7 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         red_privilege=new_privilege,
         red_scan_anchor_host=red_scan_anchor_host,
         red_scanned_hosts=new_scanned_hosts,
+        red_scanned_via=new_scanned_via,
         host_compromised=new_host_compromised,
         host_suspicious_process=new_suspicious_process,
         blue_suspicious_pid_budget=state.blue_suspicious_pid_budget,

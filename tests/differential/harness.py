@@ -252,6 +252,7 @@ class CC4DifferentialHarness:
         start_priv = jnp.zeros_like(self.jax_state.red_privilege)
         start_discovered = jnp.array(self.jax_const.red_initial_discovered_hosts)
         start_scanned = jnp.array(self.jax_const.red_initial_scanned_hosts)
+        start_scanned_via = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), -1, dtype=jnp.int32)
         start_scan_anchor = jnp.full((NUM_RED_AGENTS,), -1, dtype=jnp.int32)
         start_abstract = jnp.zeros_like(self.jax_state.red_session_is_abstract)
         host_compromised = self.jax_state.host_compromised
@@ -275,6 +276,11 @@ class CC4DifferentialHarness:
                         level = 2
                     start_priv = start_priv.at[red_idx, hidx].set(jnp.maximum(start_priv[red_idx, hidx], level))
                     host_compromised = host_compromised.at[hidx].set(jnp.maximum(host_compromised[hidx], level))
+                    for ip in getattr(sess, "ports", {}).keys():
+                        scanned_host = cyborg_state.ip_addresses.get(ip)
+                        if scanned_host in self.mappings.hostname_to_idx:
+                            scanned_hidx = self.mappings.hostname_to_idx[scanned_host]
+                            start_scanned_via = start_scanned_via.at[red_idx, scanned_hidx].set(hidx)
             if sessions:
                 primary = sessions.get(0)
                 if primary is None:
@@ -293,6 +299,7 @@ class CC4DifferentialHarness:
             red_privilege=start_priv,
             red_discovered_hosts=start_discovered,
             red_scanned_hosts=start_scanned,
+            red_scanned_via=start_scanned_via,
             red_scan_anchor_host=start_scan_anchor,
             host_compromised=host_compromised,
             fsm_host_states=fsm_states,
@@ -457,6 +464,25 @@ class CC4DifferentialHarness:
         cy_state = controller.state
         for hostname in cy_state.hosts:
             pre_services[hostname] = set(cy_state.hosts[hostname].services.keys())
+
+        from CybORG.Shared.Session import RedAbstractSession as _RAS
+
+        def _patch_session_to_abstract(action_obj, agent_name):
+            if not hasattr(action_obj, "session"):
+                return
+            sessions = cy_state.sessions.get(agent_name, {})
+            for sid in sorted(sessions):
+                if isinstance(sessions[sid], _RAS):
+                    action_obj.session = sid
+                    return
+
+        for agent_name, cy_action in cyborg_actions.items():
+            if agent_name.startswith("red_agent_"):
+                _patch_session_to_abstract(cy_action, agent_name)
+
+        for agent_name, aip in controller.actions_in_progress.items():
+            if agent_name.startswith("red_agent_") and aip and aip.get("action"):
+                _patch_session_to_abstract(aip["action"], agent_name)
 
         controller.step(cyborg_actions)
 

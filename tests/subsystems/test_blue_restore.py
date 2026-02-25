@@ -289,6 +289,7 @@ class TestDifferentialWithCybORG:
             red_sessions=state.red_sessions.at[2, target].set(True).at[2, other].set(True),
             red_privilege=state.red_privilege.at[2, target].set(COMPROMISE_USER).at[2, other].set(COMPROMISE_USER),
             red_scanned_hosts=state.red_scanned_hosts.at[2, target].set(True).at[2, other].set(True),
+            red_scanned_via=state.red_scanned_via.at[2, target].set(target).at[2, other].set(target),
             red_scan_anchor_host=state.red_scan_anchor_host.at[2].set(target),
             host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER).at[other].set(COMPROMISE_USER),
         )
@@ -358,6 +359,7 @@ class TestDifferentialWithCybORG:
             red_sessions=state.red_sessions.at[2, target].set(True).at[2, anchor].set(True),
             red_privilege=state.red_privilege.at[2, target].set(COMPROMISE_USER).at[2, anchor].set(COMPROMISE_USER),
             red_scanned_hosts=state.red_scanned_hosts.at[2, target].set(True),
+            red_scanned_via=state.red_scanned_via.at[2, target].set(target),
             red_scan_anchor_host=state.red_scan_anchor_host.at[2].set(anchor),
             red_suspicious_process_count=state.red_suspicious_process_count.at[2, anchor].set(1).at[2, target].set(0),
             host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER).at[anchor].set(COMPROMISE_USER),
@@ -442,6 +444,7 @@ class TestDifferentialWithCybORG:
             red_sessions=state.red_sessions.at[2, target].set(True).at[2, keep].set(True),
             red_privilege=state.red_privilege.at[2, target].set(COMPROMISE_USER).at[2, keep].set(COMPROMISE_USER),
             red_scanned_hosts=state.red_scanned_hosts.at[2, remote].set(True).at[2, keep].set(True),
+            red_scanned_via=state.red_scanned_via.at[2, remote].set(target).at[2, keep].set(target),
             red_scan_anchor_host=state.red_scan_anchor_host.at[2].set(target),
             red_suspicious_process_count=state.red_suspicious_process_count.at[2, target].set(0).at[2, keep].set(0),
             host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER).at[keep].set(COMPROMISE_USER),
@@ -742,7 +745,10 @@ class TestDifferentialWithCybORG:
         keep_1_ip = next(ip for ip, host in cy_state.ip_addresses.items() if host == keep_1_hostname)
         cy_state.sessions["red_agent_2"][0].addport(target_ip, 22)
         cy_state.sessions["red_agent_2"][0].addport(keep_1_ip, 443)
-        state = state.replace(red_scanned_hosts=state.red_scanned_hosts.at[2, target].set(True).at[2, keep_1].set(True))
+        state = state.replace(
+            red_scanned_hosts=state.red_scanned_hosts.at[2, target].set(True).at[2, keep_1].set(True),
+            red_scanned_via=state.red_scanned_via.at[2, target].set(promoted).at[2, keep_1].set(promoted),
+        )
 
         blue_promoted = _find_blue_for_host(const, promoted_now)
         assert blue_promoted is not None
@@ -837,7 +843,10 @@ class TestDifferentialWithCybORG:
 
         keep_ip = next(ip for ip, host in cy_state.ip_addresses.items() if host == keep_hostname)
         cy_state.sessions["red_agent_2"][0].addport(keep_ip, 22)
-        state = state.replace(red_scanned_hosts=state.red_scanned_hosts.at[2, keep].set(True))
+        state = state.replace(
+            red_scanned_hosts=state.red_scanned_hosts.at[2, keep].set(True),
+            red_scanned_via=state.red_scanned_via.at[2, keep].set(promoted),
+        )
 
         blue_promoted = _find_blue_for_host(const, promoted_now)
         assert blue_promoted is not None
@@ -942,6 +951,7 @@ class TestDifferentialWithCybORG:
             .at[scanned_host]
             .set(COMPROMISE_USER),
             red_scanned_hosts=state.red_scanned_hosts.at[2, scanned_host].set(True),
+            red_scanned_via=state.red_scanned_via.at[2, scanned_host].set(target),
             red_scan_anchor_host=state.red_scan_anchor_host.at[2].set(stale_anchor),
         )
 
@@ -1015,6 +1025,7 @@ class TestDifferentialWithCybORG:
             red_privilege=state.red_privilege.at[3, anchor].set(COMPROMISE_USER).at[3, target].set(COMPROMISE_USER),
             host_compromised=state.host_compromised.at[anchor].set(COMPROMISE_USER).at[target].set(COMPROMISE_USER),
             red_scanned_hosts=state.red_scanned_hosts.at[3, anchor].set(True).at[3, remote].set(True),
+            red_scanned_via=state.red_scanned_via.at[3, anchor].set(anchor).at[3, remote].set(anchor),
             red_scan_anchor_host=state.red_scan_anchor_host.at[3].set(anchor),
             red_suspicious_process_count=state.red_suspicious_process_count.at[3, anchor].set(1).at[3, target].set(0),
         )
@@ -1103,6 +1114,7 @@ class TestDifferentialWithCybORG:
             .at[nonstale_host]
             .set(COMPROMISE_USER),
             red_scanned_hosts=state.red_scanned_hosts.at[1, scanned_host].set(True),
+            red_scanned_via=state.red_scanned_via.at[1, scanned_host].set(anchor),
             red_scan_anchor_host=state.red_scan_anchor_host.at[1].set(anchor),
             red_suspicious_process_count=state.red_suspicious_process_count.at[1, anchor]
             .set(0)
@@ -1203,6 +1215,12 @@ class TestDifferentialWithCybORG:
             .set(True)
             .at[2, remote]
             .set(True),
+            red_scanned_via=state.red_scanned_via.at[2, target]
+            .set(anchor)
+            .at[2, keep]
+            .set(anchor)
+            .at[2, remote]
+            .set(anchor),
             red_scan_anchor_host=state.red_scan_anchor_host.at[2].set(anchor),
             red_suspicious_process_count=state.red_suspicious_process_count.at[2, target]
             .set(0)

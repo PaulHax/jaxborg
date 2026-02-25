@@ -78,11 +78,9 @@ def apply_privesc(
     had_any_sessions = jnp.any(session_counts > 0, axis=1)
     has_any_sessions_now = jnp.any(red_session_count > 0, axis=1)
     cleared_all_sessions = had_any_sessions & ~has_any_sessions_now
-    red_scanned_hosts = jnp.where(
-        cleared_all_sessions[:, None],
-        jnp.zeros_like(state.red_scanned_hosts),
-        state.red_scanned_hosts,
-    )
+    full_clear = cleared_all_sessions[:, None]
+    red_scanned_hosts = jnp.where(full_clear, False, state.red_scanned_hosts)
+    red_scanned_via = jnp.where(full_clear, -1, state.red_scanned_via)
     any_suspicious = jnp.any(red_suspicious_process_count[:, target_host] > 0)
     host_suspicious_process = jnp.where(
         is_active & has_session & is_sandboxed,
@@ -98,6 +96,7 @@ def apply_privesc(
         red_privilege=red_privilege,
         red_discovered_hosts=red_discovered_hosts,
         red_scanned_hosts=red_scanned_hosts,
+        red_scanned_via=red_scanned_via,
         host_compromised=host_compromised,
         host_suspicious_process=host_suspicious_process,
         red_activity_this_step=activity,

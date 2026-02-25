@@ -29,6 +29,17 @@ def apply_aggressive_scan(
         state.red_scanned_hosts[agent_id, target_host] | success
     )
 
+    anchor = state.red_scan_anchor_host[agent_id]
+    anchor_idx = jnp.clip(anchor, 0, state.red_session_is_abstract.shape[1] - 1)
+    anchor_is_abstract = (anchor >= 0) & state.red_session_is_abstract[agent_id, anchor_idx]
+    fallback = jnp.argmax(state.red_session_is_abstract[agent_id] & const.host_active)
+    source_host = jnp.where(anchor_is_abstract, anchor, fallback)
+    red_scanned_via = jnp.where(
+        success & ~state.red_scanned_hosts[agent_id, target_host],
+        state.red_scanned_via.at[agent_id, target_host].set(source_host),
+        state.red_scanned_via,
+    )
+
     rand_val, state = sample_detection_random(state, key)
     detected = success & (rand_val < AGGRESSIVE_DETECTION_RATE)
 
@@ -40,5 +51,6 @@ def apply_aggressive_scan(
 
     return state.replace(
         red_scanned_hosts=red_scanned_hosts,
+        red_scanned_via=red_scanned_via,
         red_activity_this_step=activity,
     )

@@ -8,7 +8,7 @@ host's subnet.
 import jax.numpy as jnp
 
 from jaxborg.actions.session_counts import effective_session_counts
-from jaxborg.constants import NUM_RED_AGENTS
+from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_RED_AGENTS
 from jaxborg.state import CC4Const, CC4State
 
 
@@ -83,42 +83,20 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     anchor_idx = jnp.clip(anchor, 0, red_sessions.shape[1] - 1)
     anchor_had_session = (anchor >= 0) & (session_counts[jnp.arange(NUM_RED_AGENTS), anchor_idx] > 0)
     anchor_has_session = anchor_had_session & red_sessions[jnp.arange(NUM_RED_AGENTS), anchor_idx]
-    removed_anchor_session = anchor_had_session & ~anchor_has_session
     red_scan_anchor_host = jnp.where(
         has_any_sessions_now,
         jnp.where(anchor_has_session, anchor, fallback_anchor),
         -1,
     )
 
-    stale_session_hosts = (session_counts > 0) & (state.red_suspicious_process_count == 0)
-    unique_stale_agent = jnp.sum(stale_session_hosts, axis=1) == 1
     removed_session_hosts = (session_counts > 0) & (red_session_count == 0)
-    removed_stale_hosts = removed_session_hosts & stale_session_hosts
-    removed_unique_stale = jnp.any(removed_session_hosts & stale_session_hosts, axis=1) & unique_stale_agent
-    scanned_non_session_hosts = state.red_scanned_hosts & ~(session_counts > 0)
-    scanned_session_hosts = state.red_scanned_hosts & (session_counts > 0)
-    removed_subnet_mask = jnp.zeros((NUM_RED_AGENTS, const.red_agent_subnets.shape[1]), dtype=jnp.bool_)
-    for subnet_idx in range(const.red_agent_subnets.shape[1]):
-        in_subnet = const.host_subnet == subnet_idx
-        removed_subnet_mask = removed_subnet_mask.at[:, subnet_idx].set(
-            jnp.any(removed_stale_hosts & in_subnet[None, :], axis=1)
-        )
-    removed_subnet_for_host = removed_subnet_mask[:, const.host_subnet]
-    scanned_session_on_removed_subnet = jnp.any(scanned_session_hosts & removed_subnet_for_host, axis=1)
-    removed_stale_with_remote_scan = (
-        jnp.any(removed_stale_hosts, axis=1)
-        & jnp.any(scanned_non_session_hosts, axis=1)
-        & scanned_session_on_removed_subnet
-        & ~jnp.any(added_session_hosts, axis=1)
-    )
-    clear_scanned = (
-        (~has_any_sessions_now) | removed_unique_stale | removed_anchor_session | removed_stale_with_remote_scan
-    )
-    red_scanned_hosts = jnp.where(
-        clear_scanned[:, None],
-        jnp.zeros_like(state.red_scanned_hosts),
-        state.red_scanned_hosts,
-    )
+    via_hosts = state.red_scanned_via
+    valid_via = via_hosts >= 0
+    clipped_via = jnp.clip(via_hosts, 0, GLOBAL_MAX_HOSTS - 1)
+    via_removed = removed_session_hosts[jnp.arange(NUM_RED_AGENTS)[:, None], clipped_via] & valid_via
+    full_clear = (~has_any_sessions_now)[:, None]
+    red_scanned_hosts = state.red_scanned_hosts & ~(full_clear | via_removed)
+    red_scanned_via = jnp.where(full_clear | via_removed, -1, state.red_scanned_via)
     host_suspicious_process = jnp.any(red_suspicious_process_count > 0, axis=0)
 
     return state.replace(
@@ -130,6 +108,7 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         red_privilege=red_privilege,
         red_discovered_hosts=red_discovered,
         red_scanned_hosts=red_scanned_hosts,
+        red_scanned_via=red_scanned_via,
         red_scan_anchor_host=red_scan_anchor_host,
         host_compromised=host_compromised,
         host_suspicious_process=host_suspicious_process,
