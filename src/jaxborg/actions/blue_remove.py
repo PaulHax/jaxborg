@@ -94,6 +94,15 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         state.host_suspicious_process.at[target_host].set(any_suspicious_after),
         state.host_suspicious_process,
     )
+    sessions_cleared_on_host = (session_count_before[:, target_host] > 0) & (new_session_count[:, target_host] == 0)
+    abstract_update = state.red_session_is_abstract.at[:, target_host].set(
+        state.red_session_is_abstract[:, target_host] & ~sessions_cleared_on_host
+    )
+    red_session_is_abstract = jnp.where(
+        covers_host,
+        abstract_update,
+        state.red_session_is_abstract,
+    )
     return state.replace(
         red_sessions=new_sessions,
         red_session_count=new_session_count,
@@ -106,4 +115,5 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         host_compromised=new_host_compromised,
         host_suspicious_process=new_suspicious_process,
         blue_suspicious_pid_budget=state.blue_suspicious_pid_budget,
+        red_session_is_abstract=red_session_is_abstract,
     )

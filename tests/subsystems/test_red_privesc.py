@@ -49,7 +49,8 @@ def _setup_exploited_state(jax_const, target_host):
 
     start_host = int(jax_const.red_start_hosts[0])
     red_sessions = state.red_sessions.at[0, start_host].set(True)
-    state = state.replace(red_sessions=red_sessions)
+    red_session_is_abstract = state.red_session_is_abstract.at[0, start_host].set(True)
+    state = state.replace(red_sessions=red_sessions, red_session_is_abstract=red_session_is_abstract)
 
     target_subnet = int(jax_const.host_subnet[target_host])
     discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
@@ -269,7 +270,8 @@ class TestDifferentialWithCybORG:
         state = state.replace(host_services=jnp.array(const.initial_services))
         start_host = int(const.red_start_hosts[0])
         red_sessions = state.red_sessions.at[0, start_host].set(True)
-        state = state.replace(red_sessions=red_sessions)
+        red_session_is_abstract = state.red_session_is_abstract.at[0, start_host].set(True)
+        state = state.replace(red_sessions=red_sessions, red_session_is_abstract=red_session_is_abstract)
         return cyborg_env, const, state
 
     def _find_and_exploit_host(self, cyborg_env, const, state):

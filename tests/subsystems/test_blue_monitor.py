@@ -52,7 +52,8 @@ def _make_jax_state(const):
     state = state.replace(host_services=jnp.array(const.initial_services))
     start_host = int(const.red_start_hosts[0])
     red_sessions = state.red_sessions.at[0, start_host].set(True)
-    return state.replace(red_sessions=red_sessions)
+    red_session_is_abstract = state.red_session_is_abstract.at[0, start_host].set(True)
+    return state.replace(red_sessions=red_sessions, red_session_is_abstract=red_session_is_abstract)
 
 
 def _cyborg_hostname_to_idx(cyborg_env):

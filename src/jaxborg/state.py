@@ -99,6 +99,7 @@ class CC4State:
     use_detection_randoms: chex.Array  # scalar bool — True = use sequence, False = use JAX RNG
 
     red_session_sandboxed: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool — sandboxed exploit sessions
+    red_session_is_abstract: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool — True for exploit-created sessions
 
     green_randoms: chex.Array  # (MAX_STEPS, GLOBAL_MAX_HOSTS, 7) float — precomputed green agent randoms
     use_green_randoms: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
@@ -177,6 +178,7 @@ def create_initial_state() -> CC4State:
         messages=jnp.zeros((NUM_BLUE_AGENTS, NUM_BLUE_AGENTS, MESSAGE_LENGTH), dtype=jnp.float32),
         fsm_host_states=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
         red_session_sandboxed=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
+        red_session_is_abstract=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         green_lwf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         green_asf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         detection_randoms=jnp.zeros(MAX_DETECTION_RANDOMS, dtype=jnp.float32),

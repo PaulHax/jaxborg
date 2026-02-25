@@ -42,6 +42,7 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
     fsm_states = state.fsm_host_states
     host_compromised = state.host_compromised
     red_scan_anchor_host = state.red_scan_anchor_host
+    red_session_is_abstract = state.red_session_is_abstract
 
     for r in range(NUM_RED_AGENTS):
         start_host = const.red_start_hosts[r]
@@ -55,6 +56,11 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
             is_active,
             red_session_count.at[r, start_host].set(1),
             red_session_count,
+        )
+        red_session_is_abstract = jnp.where(
+            is_active,
+            red_session_is_abstract.at[r, start_host].set(True),
+            red_session_is_abstract,
         )
         red_privilege = jnp.where(
             is_active,
@@ -91,6 +97,7 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
         red_scan_anchor_host=red_scan_anchor_host,
         host_compromised=host_compromised,
         fsm_host_states=fsm_states,
+        red_session_is_abstract=red_session_is_abstract,
     )
 
 

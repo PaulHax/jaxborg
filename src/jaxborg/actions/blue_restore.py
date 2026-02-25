@@ -46,6 +46,11 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         state.red_suspicious_process_count.at[:, target_host].set(0),
         state.red_suspicious_process_count,
     )
+    red_session_is_abstract = jnp.where(
+        covers_host,
+        state.red_session_is_abstract.at[:, target_host].set(False),
+        state.red_session_is_abstract,
+    )
     had_any_sessions = jnp.any(session_counts > 0, axis=1)
     has_any_sessions_now = jnp.any(red_session_count > 0, axis=1)
     cleared_all_sessions = had_any_sessions & ~has_any_sessions_now
@@ -155,4 +160,5 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         blue_suspicious_pid_budget=state.blue_suspicious_pid_budget,
         ot_service_stopped=ot_service_stopped,
         host_service_reliability=host_service_reliability,
+        red_session_is_abstract=red_session_is_abstract,
     )

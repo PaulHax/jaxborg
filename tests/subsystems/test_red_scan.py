@@ -37,8 +37,10 @@ def jax_const():
 def jax_state_with_discovered(jax_const):
     state = create_initial_state()
     start_host = int(jax_const.red_start_hosts[0])
-    red_sessions = state.red_sessions.at[0, start_host].set(True)
-    state = state.replace(red_sessions=red_sessions)
+    state = state.replace(
+        red_sessions=state.red_sessions.at[0, start_host].set(True),
+        red_session_is_abstract=state.red_session_is_abstract.at[0, start_host].set(True),
+    )
 
     start_subnet = int(jax_const.host_subnet[start_host])
     discover_idx = encode_red_action("DiscoverRemoteSystems", start_subnet, 0)
@@ -247,8 +249,10 @@ class TestDifferentialWithCybORG:
         const = build_const_from_cyborg(cyborg_env)
         state = create_initial_state()
         start_host = int(const.red_start_hosts[0])
-        red_sessions = state.red_sessions.at[0, start_host].set(True)
-        state = state.replace(red_sessions=red_sessions)
+        state = state.replace(
+            red_sessions=state.red_sessions.at[0, start_host].set(True),
+            red_session_is_abstract=state.red_session_is_abstract.at[0, start_host].set(True),
+        )
         return cyborg_env, const, state
 
     def test_scan_host_services_detected(self, cyborg_and_jax):
@@ -290,4 +294,76 @@ class TestDifferentialWithCybORG:
 
         assert bool(new_state.red_scanned_hosts[0, target_h]), (
             f"JAX should mark host {target_h} ({target_hostname}) as scanned"
+        )
+
+
+class TestScanRequiresAbstractSession:
+    """CybORG gates DiscoverNetworkServices on RedAbstractSession.
+
+    Sessions from green phishing reassignment are plain Sessions that cannot scan.
+    JAX must replicate this by tracking red_session_is_abstract.
+    """
+
+    def test_scan_fails_without_abstract_session(self):
+        """Scan must fail when agent only has non-abstract sessions (from phishing)."""
+        from jaxborg.topology import build_topology
+
+        const = build_topology(jnp.array([42]), num_steps=500)
+        state = create_initial_state()
+
+        agent_id = 0
+        start_host = int(const.red_start_hosts[agent_id])
+        target_subnet = int(const.host_subnet[start_host])
+
+        # Give agent a session but NOT an abstract one (simulating phishing reassignment)
+        state = state.replace(
+            red_sessions=state.red_sessions.at[agent_id, start_host].set(True),
+            red_session_is_abstract=state.red_session_is_abstract.at[agent_id, start_host].set(False),
+        )
+
+        # Discover hosts first
+        discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, agent_id)
+        state = apply_red_action(state, const, agent_id, discover_idx, jax.random.PRNGKey(0))
+        state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
+
+        target = _first_discovered_non_router(const, state, agent_id)
+        assert target is not None, "Need at least one discovered host to scan"
+
+        scan_idx = encode_red_action("DiscoverNetworkServices", target, agent_id)
+        new_state = apply_red_action(state, const, agent_id, scan_idx, jax.random.PRNGKey(1))
+
+        assert not bool(new_state.red_scanned_hosts[agent_id, target]), (
+            "Scan must fail when agent has no abstract session (CybORG RedAbstractSession check)"
+        )
+
+    def test_scan_succeeds_with_abstract_session(self):
+        """Scan succeeds when agent has an abstract session (from exploit)."""
+        from jaxborg.topology import build_topology
+
+        const = build_topology(jnp.array([42]), num_steps=500)
+        state = create_initial_state()
+
+        agent_id = 0
+        start_host = int(const.red_start_hosts[agent_id])
+        target_subnet = int(const.host_subnet[start_host])
+
+        # Give agent an abstract session (from exploit)
+        state = state.replace(
+            red_sessions=state.red_sessions.at[agent_id, start_host].set(True),
+            red_session_is_abstract=state.red_session_is_abstract.at[agent_id, start_host].set(True),
+        )
+
+        # Discover hosts
+        discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, agent_id)
+        state = apply_red_action(state, const, agent_id, discover_idx, jax.random.PRNGKey(0))
+        state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
+
+        target = _first_discovered_non_router(const, state, agent_id)
+        assert target is not None
+
+        scan_idx = encode_red_action("DiscoverNetworkServices", target, agent_id)
+        new_state = apply_red_action(state, const, agent_id, scan_idx, jax.random.PRNGKey(1))
+
+        assert bool(new_state.red_scanned_hosts[agent_id, target]), (
+            "Scan should succeed when agent has an abstract session"
         )

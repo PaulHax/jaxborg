@@ -34,6 +34,7 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     red_session_count = jnp.where(needs_reassign, 0, session_counts)
     red_suspicious_process_count = jnp.where(needs_reassign, 0, state.red_suspicious_process_count)
     red_privilege = jnp.where(needs_reassign, 0, state.red_privilege)
+    red_session_is_abstract = jnp.where(needs_reassign, False, state.red_session_is_abstract)
     red_discovered = state.red_discovered_hosts
     for r in range(NUM_RED_AGENTS):
         is_dest = (host_owner == r) & any_transferred  # (GLOBAL_MAX_HOSTS,)
@@ -51,6 +52,9 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
             jnp.where(is_dest, jnp.maximum(red_privilege[r], max_transferred_priv), red_privilege[r])
         )
         red_discovered = red_discovered.at[r].set(jnp.where(is_dest, True, red_discovered[r]))
+        red_session_is_abstract = red_session_is_abstract.at[r].set(
+            jnp.where(is_dest, True, red_session_is_abstract[r])
+        )
 
     red_sessions = red_session_count > 0
     red_session_multiple = red_session_count > 1
@@ -129,4 +133,5 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         red_scan_anchor_host=red_scan_anchor_host,
         host_compromised=host_compromised,
         host_suspicious_process=host_suspicious_process,
+        red_session_is_abstract=red_session_is_abstract,
     )

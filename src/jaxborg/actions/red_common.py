@@ -11,6 +11,10 @@ def has_any_session(session_hosts: chex.Array, const: CC4Const) -> chex.Array:
     return jnp.any(session_hosts & const.host_active)
 
 
+def has_abstract_session(state: CC4State, agent_id: int) -> chex.Array:
+    return jnp.any(state.red_session_is_abstract[agent_id])
+
+
 def can_reach_subnet(
     state: CC4State,
     const: CC4Const,
@@ -37,7 +41,8 @@ def exploit_common_preconditions(
     is_scanned = state.red_scanned_hosts[agent_id, target_host]
     target_subnet = const.host_subnet[target_host]
     can_reach = can_reach_subnet(state, const, agent_id, target_subnet)
-    return is_active & is_scanned & can_reach
+    is_abstract = has_abstract_session(state, agent_id)
+    return is_active & is_scanned & can_reach & is_abstract
 
 
 def apply_exploit_success(
@@ -121,6 +126,11 @@ def apply_exploit_success(
         state.blue_suspicious_pid_budget.at[:, target_host].add(blue_budget_inc),
         state.blue_suspicious_pid_budget,
     )
+    red_session_is_abstract = jnp.where(
+        success,
+        state.red_session_is_abstract.at[agent_id, target_host].set(True),
+        state.red_session_is_abstract,
+    )
 
     return state.replace(
         red_sessions=red_sessions,
@@ -134,4 +144,5 @@ def apply_exploit_success(
         host_suspicious_process=host_suspicious_process,
         red_activity_this_step=activity,
         blue_suspicious_pid_budget=blue_suspicious_pid_budget,
+        red_session_is_abstract=red_session_is_abstract,
     )

@@ -2,7 +2,7 @@ import chex
 import jax
 import jax.numpy as jnp
 
-from jaxborg.actions.red_common import can_reach_subnet
+from jaxborg.actions.red_common import can_reach_subnet, has_abstract_session
 from jaxborg.actions.rng import sample_detection_random
 from jaxborg.constants import ACTIVITY_SCAN
 from jaxborg.state import CC4Const, CC4State
@@ -22,7 +22,8 @@ def apply_aggressive_scan(
     target_subnet = const.host_subnet[target_host]
     can_reach = can_reach_subnet(state, const, agent_id, target_subnet)
 
-    success = is_active & is_discovered & can_reach
+    is_abstract = has_abstract_session(state, agent_id)
+    success = is_active & is_discovered & can_reach & is_abstract
 
     red_scanned_hosts = state.red_scanned_hosts.at[agent_id, target_host].set(
         state.red_scanned_hosts[agent_id, target_host] | success

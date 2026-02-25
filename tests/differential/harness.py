@@ -245,12 +245,15 @@ class CC4DifferentialHarness:
             host_services=jnp.array(self.jax_const.initial_services),
         )
 
+        from CybORG.Shared.Session import RedAbstractSession
+
         start_sessions = jnp.zeros_like(self.jax_state.red_sessions)
         start_session_count = jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32)
         start_priv = jnp.zeros_like(self.jax_state.red_privilege)
         start_discovered = jnp.array(self.jax_const.red_initial_discovered_hosts)
         start_scanned = jnp.array(self.jax_const.red_initial_scanned_hosts)
         start_scan_anchor = jnp.full((NUM_RED_AGENTS,), -1, dtype=jnp.int32)
+        start_abstract = jnp.zeros_like(self.jax_state.red_session_is_abstract)
         host_compromised = self.jax_state.host_compromised
         fsm_states = self.jax_state.fsm_host_states
         for agent_name, sessions in cyborg_state.sessions.items():
@@ -265,6 +268,8 @@ class CC4DifferentialHarness:
                     start_sessions = start_sessions.at[red_idx, hidx].set(True)
                     start_session_count = start_session_count.at[red_idx, hidx].add(1)
                     start_discovered = start_discovered.at[red_idx, hidx].set(True)
+                    if isinstance(sess, RedAbstractSession):
+                        start_abstract = start_abstract.at[red_idx, hidx].set(True)
                     level = 1
                     if hasattr(sess, "username") and sess.username in ("root", "SYSTEM"):
                         level = 2
@@ -291,6 +296,7 @@ class CC4DifferentialHarness:
             red_scan_anchor_host=start_scan_anchor,
             host_compromised=host_compromised,
             fsm_host_states=fsm_states,
+            red_session_is_abstract=start_abstract,
         )
 
         self.rng_key = jax.random.PRNGKey(self.seed)
@@ -512,7 +518,12 @@ class CC4DifferentialHarness:
         # --- Compare ---
         from tests.differential.state_comparator import compare_fast
 
-        diffs = compare_fast(self.cyborg_env, self.jax_state, self.jax_const, self.mappings)
+        diffs = compare_fast(
+            self.cyborg_env,
+            self.jax_state,
+            self.jax_const,
+            self.mappings,
+        )
 
         return StepResult(step=int(self.jax_state.time), diffs=diffs)
 

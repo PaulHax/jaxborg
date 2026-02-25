@@ -47,7 +47,8 @@ def jax_state_with_discovered(jax_const):
     state = create_initial_state()
     start_host = int(jax_const.red_start_hosts[0])
     red_sessions = state.red_sessions.at[0, start_host].set(True)
-    state = state.replace(red_sessions=red_sessions)
+    red_session_is_abstract = state.red_session_is_abstract.at[0, start_host].set(True)
+    state = state.replace(red_sessions=red_sessions, red_session_is_abstract=red_session_is_abstract)
     start_subnet = int(jax_const.host_subnet[start_host])
     discover_idx = encode_red_action("DiscoverRemoteSystems", start_subnet, 0)
     state = apply_red_action(state, jax_const, 0, discover_idx, jax.random.PRNGKey(0))
@@ -398,7 +399,10 @@ class TestDifferentialWithCybORG:
         state = create_initial_state()
         state = state.replace(host_services=jnp.array(const.initial_services))
         start_host = int(const.red_start_hosts[0])
-        state = state.replace(red_sessions=state.red_sessions.at[0, start_host].set(True))
+        state = state.replace(
+            red_sessions=state.red_sessions.at[0, start_host].set(True),
+            red_session_is_abstract=state.red_session_is_abstract.at[0, start_host].set(True),
+        )
         return cyborg_env, const, state
 
     def test_degrade_only_changes_active_service_reliability_matches_cyborg(self, cyborg_and_jax):
