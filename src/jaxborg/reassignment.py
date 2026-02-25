@@ -72,13 +72,12 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     # CybORG keeps session id 0 stable unless that specific host session is gone.
     anchor = state.red_scan_anchor_host
     has_any_sessions_now = jnp.any(red_sessions, axis=1)
-    added_session_hosts = (session_counts == 0) & (red_session_count > 0)
-    has_added_session = jnp.any(added_session_hosts, axis=1)
-    first_added_host = jnp.argmax(added_session_hosts & const.host_active[None, :], axis=1)
     session_hosts = red_sessions & const.host_active[None, :]
-    last_session_from_end = jnp.argmax(jnp.flip(session_hosts, axis=1), axis=1)
-    last_session_host = red_sessions.shape[1] - 1 - last_session_from_end
-    fallback_anchor = jnp.where(has_added_session, first_added_host, last_session_host)
+    abstract_hosts = red_session_is_abstract & session_hosts
+    has_abstract = jnp.any(abstract_hosts, axis=1)
+    first_abstract = jnp.argmax(abstract_hosts, axis=1)
+    first_session = jnp.argmax(session_hosts, axis=1)
+    fallback_anchor = jnp.where(has_abstract, first_abstract, first_session)
     fallback_anchor = jnp.where(has_any_sessions_now, fallback_anchor, -1)
     anchor_idx = jnp.clip(anchor, 0, red_sessions.shape[1] - 1)
     anchor_had_session = (anchor >= 0) & (session_counts[jnp.arange(NUM_RED_AGENTS), anchor_idx] > 0)

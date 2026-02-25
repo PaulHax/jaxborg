@@ -36,7 +36,8 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         remove_n = jnp.minimum(remove_n, max_removable)
         has_abstract = state.red_session_is_abstract[r, target_host]
         non_abstract_count = count - has_abstract.astype(jnp.int32)
-        abstract_safe = has_abstract & (non_abstract_count > 0) & (remove_n > non_abstract_count)
+        all_suspicious = suspicious_count >= count
+        abstract_safe = has_abstract & (non_abstract_count > 0) & (remove_n > non_abstract_count) & ~all_suspicious
         remove_n = jnp.where(abstract_safe, non_abstract_count, remove_n)
         remaining_budget = jnp.maximum(remaining_budget - remove_n, 0)
         count_after = jnp.maximum(count - remove_n, 0)
@@ -79,10 +80,14 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
     new_scanned_hosts = state.red_scanned_hosts & ~(full_clear | via_clear)
     new_scanned_via = jnp.where(full_clear | via_clear, -1, state.red_scanned_via)
     session_hosts = new_sessions & const.host_active[None, :]
-    last_session_from_end = jnp.argmax(jnp.flip(session_hosts, axis=1), axis=1)
-    last_session_host = new_session_count.shape[1] - 1 - last_session_from_end
-    fallback_anchor = jnp.where(has_any_sessions_now, last_session_host, -1)
-    removed_anchor = cleared_all_sessions & (state.red_scan_anchor_host == target_host)
+    abstract_hosts = state.red_session_is_abstract & session_hosts
+    has_abstract = jnp.any(abstract_hosts, axis=1)
+    first_abstract = jnp.argmax(abstract_hosts, axis=1)
+    first_session = jnp.argmax(session_hosts, axis=1)
+    fallback_anchor = jnp.where(has_abstract, first_abstract, first_session)
+    fallback_anchor = jnp.where(has_any_sessions_now, fallback_anchor, -1)
+    anchor_host_cleared = sessions_lost_on_target & (state.red_scan_anchor_host == jnp.int32(target_host))
+    removed_anchor = cleared_all_sessions | anchor_host_cleared
     red_scan_anchor_host = jnp.where(
         removed_anchor,
         fallback_anchor,

@@ -43,6 +43,7 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
     host_compromised = state.host_compromised
     red_scan_anchor_host = state.red_scan_anchor_host
     red_session_is_abstract = state.red_session_is_abstract
+    red_scanned_via = state.red_scanned_via
 
     for r in range(NUM_RED_AGENTS):
         start_host = const.red_start_hosts[r]
@@ -87,6 +88,13 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
             red_scan_anchor_host.at[r].set(start_host),
             red_scan_anchor_host,
         )
+        initially_scanned = const.red_initial_scanned_hosts[r]
+        new_via_row = jnp.where(initially_scanned, start_host, red_scanned_via[r])
+        red_scanned_via = jnp.where(
+            is_active,
+            red_scanned_via.at[r].set(new_via_row),
+            red_scanned_via,
+        )
 
     return state.replace(
         red_sessions=red_sessions,
@@ -94,6 +102,7 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
         red_privilege=red_privilege,
         red_discovered_hosts=red_discovered,
         red_scanned_hosts=red_scanned,
+        red_scanned_via=red_scanned_via,
         red_scan_anchor_host=red_scan_anchor_host,
         host_compromised=host_compromised,
         fsm_host_states=fsm_states,
