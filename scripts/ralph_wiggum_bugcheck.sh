@@ -40,7 +40,7 @@ echo ""
 EXTRA_ARGS="${*:-}"
 
 echo "--- Running bugcheck tests ---"
-uv run pytest tests/test_bugcheck.py -v $EXTRA_ARGS
+uv run pytest tests/test_cc2_regression.py -v $EXTRA_ARGS
 
 echo ""
 echo "--- Running existing differential tests ---"
