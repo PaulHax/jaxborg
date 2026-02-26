@@ -471,10 +471,26 @@ class CC4DifferentialHarness:
             if not hasattr(action_obj, "session"):
                 return
             sessions = cy_state.sessions.get(agent_name, {})
+            target_ip = getattr(action_obj, "ip_address", None)
+            fallback_sid = None
+            anchor_sid = None
+            agent_idx = int(agent_name.split("_")[-1])
+            anchor_host = int(self.jax_state.red_scan_anchor_host[agent_idx])
+            anchor_hostname = self.mappings.idx_to_hostname.get(anchor_host) if anchor_host >= 0 else None
             for sid in sorted(sessions):
-                if isinstance(sessions[sid], _RAS):
+                if not isinstance(sessions[sid], _RAS):
+                    continue
+                if fallback_sid is None:
+                    fallback_sid = sid
+                if target_ip is not None and target_ip in sessions[sid].ports:
                     action_obj.session = sid
                     return
+                if anchor_hostname is not None and sessions[sid].hostname == anchor_hostname:
+                    anchor_sid = sid
+            if anchor_sid is not None:
+                action_obj.session = anchor_sid
+            elif fallback_sid is not None:
+                action_obj.session = fallback_sid
 
         for agent_name, cy_action in cyborg_actions.items():
             if agent_name.startswith("red_agent_"):
