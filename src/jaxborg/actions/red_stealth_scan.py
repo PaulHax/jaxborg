@@ -2,7 +2,11 @@ import chex
 import jax
 import jax.numpy as jnp
 
-from jaxborg.actions.red_common import can_reach_subnet, has_abstract_session
+from jaxborg.actions.red_common import (
+    can_reach_subnet,
+    has_abstract_session,
+    select_scan_source_host,
+)
 from jaxborg.actions.rng import sample_detection_random
 from jaxborg.constants import ACTIVITY_SCAN
 from jaxborg.state import CC4Const, CC4State
@@ -29,11 +33,7 @@ def apply_stealth_scan(
         state.red_scanned_hosts[agent_id, target_host] | success
     )
 
-    anchor = state.red_scan_anchor_host[agent_id]
-    anchor_idx = jnp.clip(anchor, 0, state.red_session_is_abstract.shape[1] - 1)
-    anchor_is_abstract = (anchor >= 0) & state.red_session_is_abstract[agent_id, anchor_idx]
-    fallback = jnp.argmax(state.red_session_is_abstract[agent_id] & const.host_active)
-    source_host = jnp.where(anchor_is_abstract, anchor, fallback)
+    source_host = select_scan_source_host(state, const, agent_id)
     red_scanned_via = jnp.where(
         success & ~state.red_scanned_hosts[agent_id, target_host],
         state.red_scanned_via.at[agent_id, target_host].set(source_host),

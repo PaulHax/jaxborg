@@ -4,17 +4,19 @@ import numpy as np
 import pytest
 from CybORG import CybORG
 from CybORG.Agents import SleepAgent
-from CybORG.Simulator.Actions import DiscoverRemoteSystems
+from CybORG.Shared.Session import RedAbstractSession, Session
+from CybORG.Simulator.Actions import DiscoverRemoteSystems, Restore
 from CybORG.Simulator.Actions.AbstractActions.DiscoverNetworkServices import (
     AggressiveServiceDiscovery,
 )
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
-from jaxborg.actions import apply_red_action
+from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.encoding import (
     ACTION_TYPE_SCAN,
     RED_SCAN_START,
     decode_red_action,
+    encode_blue_action,
     encode_red_action,
 )
 from jaxborg.actions.red_common import can_reach_subnet
@@ -28,6 +30,7 @@ from jaxborg.state import create_initial_state
 from jaxborg.topology import CYBORG_SUFFIX_TO_ID
 
 _jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
+_jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))
 
 
 @pytest.fixture(scope="module")
@@ -292,6 +295,186 @@ class TestDifferentialWithCybORG:
         assert bool(new_state.red_scanned_hosts[0, target_h]), (
             f"JAX should mark host {target_h} ({target_hostname}) as scanned"
         )
+
+    def test_restore_of_unrelated_abstract_session_keeps_scan_memory_matches_cyborg(self):
+        """Regression: scan ownership should not drift to lowest abstract host index.
+
+        If scan memory belongs to one abstract session and a different abstract
+        session is restored, CybORG keeps the scanned host. JAX must do the same.
+        """
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        cyborg_env = CybORG(scenario_generator=sg, seed=5)
+        cyborg_env.reset()
+
+        const = build_const_from_cyborg(cyborg_env)
+        mappings = build_mappings_from_cyborg(cyborg_env)
+        cy_state = cyborg_env.environment_controller.state
+        controller = cyborg_env.environment_controller
+
+        red_agent_id = 3
+        red_agent_name = f"red_agent_{red_agent_id}"
+
+        choice = None
+        for subnet_id in range(NUM_SUBNETS):
+            if not bool(const.red_agent_subnets[red_agent_id, subnet_id]):
+                continue
+            subnet_hosts = [
+                h
+                for h in range(int(const.num_hosts))
+                if bool(const.host_active[h])
+                and not bool(const.host_is_router[h])
+                and int(const.host_subnet[h]) == subnet_id
+            ]
+            if len(subnet_hosts) < 4:
+                continue
+            subnet_hosts = sorted(subnet_hosts)
+            removable_hosts = [h for h in subnet_hosts if any(bool(const.blue_agent_hosts[b, h]) for b in range(5))]
+            if not removable_hosts:
+                continue
+            low_host = removable_hosts[0]
+            high_host = subnet_hosts[-1] if subnet_hosts[-1] != low_host else subnet_hosts[-2]
+            remaining = [h for h in subnet_hosts if h not in {low_host, high_host}]
+            if len(remaining) < 2:
+                continue
+            anchor_host = remaining[0]
+            target_host = remaining[1]
+            choice = (subnet_id, low_host, high_host, anchor_host, target_host)
+            break
+
+        assert choice is not None, "Need a subnet with removable host and multiple red-reachable targets"
+        subnet_id, low_host, high_host, anchor_host, target_host = choice
+
+        cy_state.add_session(
+            Session(
+                ident=None,
+                hostname=mappings.idx_to_hostname[anchor_host],
+                username="user",
+                agent=red_agent_name,
+                parent=0,
+                session_type="shell",
+                pid=None,
+            )
+        )
+        cy_state.add_session(
+            RedAbstractSession(
+                ident=None,
+                hostname=mappings.idx_to_hostname[high_host],
+                username="user",
+                agent=red_agent_name,
+                parent=0,
+                session_type="shell",
+                pid=None,
+            )
+        )
+        cy_state.add_session(
+            RedAbstractSession(
+                ident=None,
+                hostname=mappings.idx_to_hostname[low_host],
+                username="user",
+                agent=red_agent_name,
+                parent=0,
+                session_type="shell",
+                pid=None,
+            )
+        )
+
+        red_sessions = cy_state.sessions[red_agent_name]
+        anchor_sid = next(
+            sid
+            for sid, sess in red_sessions.items()
+            if sess.hostname == mappings.idx_to_hostname[anchor_host] and type(sess).__name__ == "Session"
+        )
+        high_sid = next(
+            sid
+            for sid, sess in red_sessions.items()
+            if sess.hostname == mappings.idx_to_hostname[high_host] and type(sess).__name__ == "RedAbstractSession"
+        )
+        low_sid = next(
+            sid
+            for sid, sess in red_sessions.items()
+            if sess.hostname == mappings.idx_to_hostname[low_host] and type(sess).__name__ == "RedAbstractSession"
+        )
+        iface = controller.agent_interfaces[red_agent_name]
+        for sid in (anchor_sid, high_sid, low_sid):
+            iface.action_space.client_session[sid] = True
+            iface.action_space.server_session[sid] = True
+
+        seed_host = anchor_host
+        seed_ip = mappings.hostname_to_ip[mappings.idx_to_hostname[seed_host]]
+        red_sessions[high_sid].addport(seed_ip, 22)
+
+        subnet_name = next(name for name, sid in CYBORG_SUFFIX_TO_ID.items() if sid == subnet_id)
+        subnet_cidr = cy_state.subnet_name_to_cidr[subnet_name]
+        discover_action = DiscoverRemoteSystems(subnet=subnet_cidr, session=high_sid, agent=red_agent_name)
+        discover_action.duration = 1
+        cyborg_env.step(agent=red_agent_name, action=discover_action)
+
+        target_ip = mappings.hostname_to_ip[mappings.idx_to_hostname[target_host]]
+        scan_action = AggressiveServiceDiscovery(session=high_sid, agent=red_agent_name, ip_address=target_ip)
+        scan_action.duration = 1
+        cyborg_env.step(agent=red_agent_name, action=scan_action)
+
+        def _cy_scanned_hosts():
+            scanned = set()
+            for sess in cy_state.sessions[red_agent_name].values():
+                for ip in getattr(sess, "ports", {}).keys():
+                    hostname = cy_state.ip_addresses.get(ip)
+                    if hostname in mappings.hostname_to_idx:
+                        scanned.add(mappings.hostname_to_idx[hostname])
+            return scanned
+
+        assert target_host in _cy_scanned_hosts(), "CybORG setup failed to scan target host"
+
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        for h in (anchor_host, high_host, low_host):
+            state = state.replace(
+                red_sessions=state.red_sessions.at[red_agent_id, h].set(True),
+                red_session_count=state.red_session_count.at[red_agent_id, h].set(1),
+                red_privilege=state.red_privilege.at[red_agent_id, h].set(1),
+                red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, h].set(True),
+            )
+        state = state.replace(
+            red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, anchor_host]
+            .set(False)
+            .at[red_agent_id, high_host]
+            .set(True)
+            .at[red_agent_id, low_host]
+            .set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(anchor_host),
+            red_scanned_hosts=state.red_scanned_hosts.at[red_agent_id, seed_host].set(True),
+            red_scanned_via=state.red_scanned_via.at[red_agent_id, seed_host].set(high_host),
+        )
+
+        discover_idx = encode_red_action("DiscoverRemoteSystems", subnet_id, red_agent_id)
+        state = _jit_apply_red(state, const, red_agent_id, discover_idx, jax.random.PRNGKey(0))
+        state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
+        scan_idx = encode_red_action("AggressiveServiceDiscovery", target_host, red_agent_id)
+        state = _jit_apply_red(state, const, red_agent_id, scan_idx, jax.random.PRNGKey(1))
+        assert bool(state.red_scanned_hosts[red_agent_id, target_host]), "JAX setup failed to scan target host"
+
+        blue_agent_id = next(b for b in range(5) if bool(const.blue_agent_hosts[b, low_host]))
+        restore_action = Restore(
+            session=0,
+            agent=f"blue_agent_{blue_agent_id}",
+            hostname=mappings.idx_to_hostname[low_host],
+        )
+        cyborg_env.step(agent=f"blue_agent_{blue_agent_id}", action=restore_action)
+
+        blue_restore_idx = encode_blue_action("Restore", low_host, blue_agent_id)
+        state = _jit_apply_blue(state, const, blue_agent_id, blue_restore_idx)
+
+        cy_target_scanned = target_host in _cy_scanned_hosts()
+        jax_target_scanned = bool(state.red_scanned_hosts[red_agent_id, target_host])
+        assert cy_target_scanned, "CybORG should keep scan memory tied to the other abstract session"
+        assert jax_target_scanned == cy_target_scanned
 
 
 class TestScanRequiresAbstractSession:

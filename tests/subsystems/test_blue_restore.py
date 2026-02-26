@@ -1446,30 +1446,50 @@ class TestRestorePreservesOtherSessionScanData:
         scanned_ip = next(ip for ip, host in cy_state.ip_addresses.items() if host == scanned_hostname)
 
         red_anchor = RedAbstractSession(
-            ident=None, hostname=anchor_hostname, username="user",
-            agent="red_agent_1", parent=0, session_type="shell", pid=None,
+            ident=None,
+            hostname=anchor_hostname,
+            username="user",
+            agent="red_agent_1",
+            parent=0,
+            session_type="shell",
+            pid=None,
         )
         red_other = RedAbstractSession(
-            ident=None, hostname=other_hostname, username="user",
-            agent="red_agent_1", parent=0, session_type="shell", pid=None,
+            ident=None,
+            hostname=other_hostname,
+            username="user",
+            agent="red_agent_1",
+            parent=0,
+            session_type="shell",
+            pid=None,
         )
         cy_state.add_session(red_anchor)
         cy_state.add_session(red_other)
 
         anchor_sess = next(
-            sess for sess in cy_state.sessions["red_agent_1"].values()
+            sess
+            for sess in cy_state.sessions["red_agent_1"].values()
             if sess.hostname == anchor_hostname and isinstance(sess, RedAbstractSession)
         )
         anchor_sess.addport(scanned_ip, 22)
 
         state = state.replace(
             red_sessions=state.red_sessions.at[1, anchor_host].set(True).at[1, other_host].set(True),
-            red_session_is_abstract=state.red_session_is_abstract.at[1, anchor_host].set(True).at[1, other_host].set(True),
-            red_privilege=state.red_privilege.at[1, anchor_host].set(COMPROMISE_USER).at[1, other_host].set(COMPROMISE_USER),
+            red_session_is_abstract=state.red_session_is_abstract.at[1, anchor_host]
+            .set(True)
+            .at[1, other_host]
+            .set(True),
+            red_privilege=state.red_privilege.at[1, anchor_host]
+            .set(COMPROMISE_USER)
+            .at[1, other_host]
+            .set(COMPROMISE_USER),
             red_scanned_hosts=state.red_scanned_hosts.at[1, scanned_target].set(True),
             red_scanned_via=state.red_scanned_via.at[1, scanned_target].set(anchor_host),
             red_scan_anchor_host=state.red_scan_anchor_host.at[1].set(anchor_host),
-            host_compromised=state.host_compromised.at[anchor_host].set(COMPROMISE_USER).at[other_host].set(COMPROMISE_USER),
+            host_compromised=state.host_compromised.at[anchor_host]
+            .set(COMPROMISE_USER)
+            .at[other_host]
+            .set(COMPROMISE_USER),
         )
 
         blue_idx = _find_blue_for_host(const, other_host)
@@ -1477,7 +1497,7 @@ class TestRestorePreservesOtherSessionScanData:
 
         restore_action = Restore(session=0, agent=f"blue_agent_{blue_idx}", hostname=other_hostname)
         restore_action.duration = 1
-        cy_obs = restore_action.execute(cy_state)
+        restore_action.execute(cy_state)
 
         action_idx = encode_blue_action("Restore", other_host, blue_idx)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)

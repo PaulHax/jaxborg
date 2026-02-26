@@ -45,6 +45,51 @@ def exploit_common_preconditions(
     return is_active & is_scanned & can_reach & is_abstract
 
 
+def select_scan_source_host(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+) -> chex.Array:
+    """Choose the host that owns new scan memory for this red agent.
+
+    CybORG ties scan memory to a concrete abstract session. When the anchor host
+    is non-abstract, prefer the existing abstract scan owner (mode of valid
+    `red_scanned_via`) before falling back to any abstract session host.
+    """
+    anchor = state.red_scan_anchor_host[agent_id]
+    anchor_idx = jnp.clip(anchor, 0, state.red_session_is_abstract.shape[1] - 1)
+    anchor_is_abstract = (
+        (anchor >= 0)
+        & state.red_session_is_abstract[agent_id, anchor_idx]
+        & state.red_sessions[agent_id, anchor_idx]
+        & const.host_active[anchor_idx]
+    )
+
+    abstract_hosts = state.red_session_is_abstract[agent_id] & state.red_sessions[agent_id] & const.host_active
+    fallback = jnp.argmax(abstract_hosts)
+
+    via_row = state.red_scanned_via[agent_id]
+    scanned_row = state.red_scanned_hosts[agent_id]
+    valid_via = scanned_row & (via_row >= 0)
+    clipped_via = jnp.clip(via_row, 0, state.red_session_is_abstract.shape[1] - 1)
+    valid_via = (
+        valid_via
+        & state.red_session_is_abstract[agent_id, clipped_via]
+        & state.red_sessions[agent_id, clipped_via]
+        & const.host_active[clipped_via]
+    )
+
+    via_counts = jnp.sum(
+        jax.nn.one_hot(clipped_via, state.red_session_is_abstract.shape[1], dtype=jnp.int32)
+        * valid_via[:, None].astype(jnp.int32),
+        axis=0,
+    )
+    has_existing_owner = jnp.any(via_counts > 0)
+    preferred_owner = jnp.argmax(via_counts)
+
+    return jnp.where(anchor_is_abstract, anchor, jnp.where(has_existing_owner, preferred_owner, fallback))
+
+
 def apply_exploit_success(
     state: CC4State,
     const: CC4Const,

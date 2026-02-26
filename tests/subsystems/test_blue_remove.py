@@ -1470,3 +1470,68 @@ class TestDifferentialWithCybORG:
         jax_scanned = {h for h in range(int(const.num_hosts)) if bool(new_state.red_scanned_hosts[3, h])}
         assert cy_scanned == set()
         assert jax_scanned == cy_scanned
+
+    def test_remove_uses_blue_pid_budget_when_it_exceeds_jax_suspicious_count_matches_cyborg(self, cyborg_and_jax):
+        """If CybORG has more valid suspicious PIDs than JAX suspicious count, remove should follow CybORG PIDs."""
+        cyborg_env, const, state = cyborg_and_jax
+        cyborg_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cyborg_state.hosts.keys())
+
+        target = _find_host_in_subnet(const, "RESTRICTED_ZONE_B")
+        assert target is not None
+        target_hostname = sorted_hosts[target]
+
+        blue_idx = _find_blue_for_host(const, target)
+        assert blue_idx is not None
+
+        for _ in range(5):
+            cyborg_state.add_session(
+                RedAbstractSession(
+                    ident=None,
+                    hostname=target_hostname,
+                    username="user",
+                    agent="red_agent_3",
+                    parent=0,
+                    session_type="shell",
+                    pid=None,
+                )
+            )
+
+        cy_target_sessions = [s for s in cyborg_state.sessions["red_agent_3"].values() if s.hostname == target_hostname]
+        assert len(cy_target_sessions) == 5
+        blue_parent = cyborg_state.sessions[f"blue_agent_{blue_idx}"][0]
+        for sess in cy_target_sessions:
+            blue_parent.add_sus_pids(hostname=target_hostname, pid=sess.pid)
+        assert len(blue_parent.sus_pids[target_hostname]) == 5
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[3, target].set(True),
+            red_session_count=state.red_session_count.at[3, target].set(5),
+            red_session_multiple=state.red_session_multiple.at[3, target].set(True),
+            red_session_many=state.red_session_many.at[3, target].set(True),
+            red_session_is_abstract=state.red_session_is_abstract.at[3, target].set(True),
+            red_privilege=state.red_privilege.at[3, target].set(COMPROMISE_USER),
+            # Reproduces mismatch where JAX suspicious count underestimates true blue PID budget.
+            red_suspicious_process_count=state.red_suspicious_process_count.at[3, target].set(3),
+            host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
+            host_has_malware=state.host_has_malware.at[target].set(True),
+            host_suspicious_process=state.host_suspicious_process.at[target].set(True),
+            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(5),
+        )
+
+        remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
+        remove_action.duration = 1
+        cyborg_obs = remove_action.execute(cyborg_state)
+        assert cyborg_obs.success
+
+        action_idx = encode_blue_action("Remove", target, blue_idx)
+        new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
+
+        cyborg_remaining = [s for s in cyborg_state.sessions["red_agent_3"].values() if s.hostname == target_hostname]
+        cyborg_has_user_session = any(not s.has_privileged_access() for s in cyborg_remaining)
+        expected_priv = COMPROMISE_USER if cyborg_has_user_session else COMPROMISE_NONE
+
+        assert not cyborg_has_user_session
+        assert bool(new_state.red_sessions[3, target]) == cyborg_has_user_session
+        assert int(new_state.red_privilege[3, target]) == expected_priv
+        assert int(new_state.host_compromised[target]) == expected_priv

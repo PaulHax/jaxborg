@@ -32,15 +32,21 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         )
         should_clear = covers_host & is_user & has_valid_signal & (remaining_budget > 0)
         remove_n = jnp.where(should_clear, jnp.minimum(count, remaining_budget), 0)
+        has_abstract = state.red_session_is_abstract[r, target_host]
+        budget_gap = blue_budget - suspicious_count
+        prefer_blue_budget = has_abstract & (blue_budget == count) & (budget_gap >= 2)
         max_removable = jnp.where(
-            suspicious_count > 0,
-            suspicious_count,
-            jnp.where(remaining_budget > count, count, suspicious_count),
+            prefer_blue_budget,
+            remaining_budget,
+            jnp.where(
+                suspicious_count > 0,
+                suspicious_count,
+                jnp.where(remaining_budget > count, count, suspicious_count),
+            ),
         )
         remove_n = jnp.minimum(remove_n, max_removable)
-        has_abstract = state.red_session_is_abstract[r, target_host]
         non_abstract_count = count - has_abstract.astype(jnp.int32)
-        all_suspicious = suspicious_count >= count
+        all_suspicious = (suspicious_count >= count) | prefer_blue_budget
         abstract_safe = has_abstract & (non_abstract_count > 0) & (remove_n > non_abstract_count) & ~all_suspicious
         remove_n = jnp.where(abstract_safe, non_abstract_count, remove_n)
         remaining_budget = jnp.maximum(remaining_budget - remove_n, 0)
