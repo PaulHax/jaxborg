@@ -9,11 +9,16 @@ from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.duration import process_blue_with_duration, process_red_with_duration
 from jaxborg.actions.encoding import (
+    ACTION_TYPE_AGGRESSIVE_SCAN,
+    ACTION_TYPE_SCAN,
+    ACTION_TYPE_STEALTH_SCAN,
     BLUE_DECOY_END,
     BLUE_DECOY_START,
     BLUE_SLEEP,
     RED_SLEEP,
+    decode_red_action,
 )
+from jaxborg.actions.red_common import select_scan_execution_source_host
 from jaxborg.actions.green import apply_green_agents
 from jaxborg.agents.fsm_red import (
     fsm_red_get_action_and_info,
@@ -440,10 +445,24 @@ class CC4DifferentialHarness:
                 target_hosts.append(eff_host)
                 fsm_actions.append(eff_fsm_act)
                 eligible_flags.append(eff_eligible)
+                prebound_source = self.jax_state.red_pending_source_host[r]
+                if not is_busy:
+                    action_type, _, target_host = decode_red_action(action, r, self.jax_const)
+                    is_scan_action = (
+                        (action_type == ACTION_TYPE_SCAN)
+                        | (action_type == ACTION_TYPE_AGGRESSIVE_SCAN)
+                        | (action_type == ACTION_TYPE_STEALTH_SCAN)
+                    )
+                    prebound_source = jnp.where(
+                        is_scan_action,
+                        select_scan_execution_source_host(self.jax_state, self.jax_const, r, target_host),
+                        jnp.int32(-1),
+                    )
 
                 self.jax_state = self.jax_state.replace(
                     red_pending_fsm_action=self.jax_state.red_pending_fsm_action.at[r].set(eff_fsm_act),
                     red_pending_target_host=self.jax_state.red_pending_target_host.at[r].set(eff_host),
+                    red_pending_source_host=self.jax_state.red_pending_source_host.at[r].set(prebound_source),
                 )
             else:
                 red_actions[r] = RED_SLEEP

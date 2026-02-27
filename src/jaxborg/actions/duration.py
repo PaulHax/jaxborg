@@ -3,11 +3,15 @@ import jax.numpy as jnp
 
 from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.encoding import (
+    ACTION_TYPE_AGGRESSIVE_SCAN,
+    ACTION_TYPE_SCAN,
+    ACTION_TYPE_STEALTH_SCAN,
     BLUE_ACTION_DURATIONS,
     RED_ACTION_DURATIONS,
     decode_blue_action,
     decode_red_action,
 )
+from jaxborg.actions.red_common import select_scan_execution_source_host
 from jaxborg.state import CC4Const, CC4State
 
 
@@ -27,25 +31,57 @@ def process_red_with_duration(
         jnp.asarray(key, dtype=jnp.uint32),
     )
 
-    action_type, _, _ = decode_red_action(effective_action, agent_id, const)
+    action_type, _, target_host = decode_red_action(effective_action, agent_id, const)
     duration = RED_ACTION_DURATIONS[action_type]
     current_ticks = jnp.where(is_busy, state.red_pending_ticks[agent_id], duration)
+    is_scan_action = (
+        (action_type == ACTION_TYPE_SCAN)
+        | (action_type == ACTION_TYPE_AGGRESSIVE_SCAN)
+        | (action_type == ACTION_TYPE_STEALTH_SCAN)
+    )
+    queued_source_host = jnp.where(
+        is_scan_action,
+        jnp.where(
+            state.red_pending_source_host[agent_id] >= 0,
+            state.red_pending_source_host[agent_id],
+            select_scan_execution_source_host(state, const, agent_id, target_host),
+        ),
+        jnp.int32(-1),
+    )
+    effective_source_host = jnp.where(is_busy, state.red_pending_source_host[agent_id], queued_source_host)
+    rebound_source_host = select_scan_execution_source_host(state, const, agent_id, target_host)
+    effective_source_host = jnp.where(
+        is_busy & is_scan_action & (effective_source_host < 0),
+        rebound_source_host,
+        effective_source_host,
+    )
+    source_idx = jnp.clip(effective_source_host, 0, state.red_sessions.shape[1] - 1)
+    source_valid = (
+        (effective_source_host >= 0)
+        & state.red_sessions[agent_id, source_idx]
+        & state.red_session_is_abstract[agent_id, source_idx]
+        & const.host_active[source_idx]
+    )
 
     new_ticks = current_ticks - 1
     should_execute = new_ticks <= 0
+    requires_bound_source = is_scan_action
+    can_execute = should_execute & ((~requires_bound_source) | source_valid)
 
     new_state = jax.lax.cond(
-        should_execute,
+        can_execute,
         lambda s: apply_red_action(s, const, agent_id, effective_action, effective_key),
         lambda s: s,
         state,
     )
 
     final_ticks = jnp.where(should_execute, jnp.int32(0), new_ticks)
+    final_source_host = jnp.where(should_execute, jnp.int32(-1), effective_source_host)
     new_state = new_state.replace(
         red_pending_ticks=new_state.red_pending_ticks.at[agent_id].set(final_ticks),
         red_pending_action=new_state.red_pending_action.at[agent_id].set(effective_action),
         red_pending_key=new_state.red_pending_key.at[agent_id].set(effective_key),
+        red_pending_source_host=new_state.red_pending_source_host.at[agent_id].set(final_source_host),
     )
 
     return new_state

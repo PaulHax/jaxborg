@@ -35,7 +35,7 @@ def apply_aggressive_scan(
 
     source_host = select_scan_source_host(state, const, agent_id)
     red_scanned_via = jnp.where(
-        success & ~state.red_scanned_hosts[agent_id, target_host],
+        success,
         state.red_scanned_via.at[agent_id, target_host].set(source_host),
         state.red_scanned_via,
     )

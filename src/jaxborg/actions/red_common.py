@@ -12,7 +12,7 @@ def has_any_session(session_hosts: chex.Array, const: CC4Const) -> chex.Array:
 
 
 def has_abstract_session(state: CC4State, agent_id: int) -> chex.Array:
-    return jnp.any(state.red_session_is_abstract[agent_id])
+    return jnp.any(state.red_session_is_abstract[agent_id] & state.red_sessions[agent_id])
 
 
 def can_reach_subnet(
@@ -88,6 +88,46 @@ def select_scan_source_host(
     preferred_owner = jnp.argmax(via_counts)
 
     return jnp.where(anchor_is_abstract, anchor, jnp.where(has_existing_owner, preferred_owner, fallback))
+
+
+def select_scan_execution_source_host(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+    target_host: chex.Array,
+) -> chex.Array:
+    """Choose the abstract source host used to execute a queued scan action.
+
+    CybORG source session selection for scan-like actions prefers a target-specific
+    known source first (session already owning scan memory for that target), then
+    falls back to anchor session, then any abstract session.
+    """
+    target_idx = jnp.clip(target_host, 0, state.red_scanned_hosts.shape[1] - 1)
+    target_scanned = state.red_scanned_hosts[agent_id, target_idx]
+    via = state.red_scanned_via[agent_id, target_idx]
+    via_idx = jnp.clip(via, 0, state.red_session_is_abstract.shape[1] - 1)
+    via_valid = (
+        (via >= 0)
+        & state.red_sessions[agent_id, via_idx]
+        & state.red_session_is_abstract[agent_id, via_idx]
+        & const.host_active[via_idx]
+    )
+
+    anchor = state.red_scan_anchor_host[agent_id]
+    anchor_idx = jnp.clip(anchor, 0, state.red_session_is_abstract.shape[1] - 1)
+    anchor_valid = (
+        (anchor >= 0)
+        & state.red_sessions[agent_id, anchor_idx]
+        & state.red_session_is_abstract[agent_id, anchor_idx]
+        & const.host_active[anchor_idx]
+    )
+
+    abstract_hosts = state.red_session_is_abstract[agent_id] & state.red_sessions[agent_id] & const.host_active
+    has_fallback = jnp.any(abstract_hosts)
+    fallback = jnp.argmax(abstract_hosts)
+    fallback = jnp.where(has_fallback, fallback, -1)
+
+    return jnp.where(anchor_valid, anchor, jnp.where(target_scanned & via_valid, via, fallback))
 
 
 def apply_exploit_success(

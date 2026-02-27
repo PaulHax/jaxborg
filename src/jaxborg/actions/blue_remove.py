@@ -27,14 +27,16 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
             & (
                 state.host_suspicious_process[target_host]
                 | (~target_is_scanned & state.host_activity_detected[target_host])
-                | (~state.host_has_malware[target_host] & target_is_scanned)
+                | ((blue_budget >= 4) & ~state.host_has_malware[target_host] & target_is_scanned)
             )
         )
         should_clear = covers_host & is_user & has_valid_signal & (remaining_budget > 0)
         remove_n = jnp.where(should_clear, jnp.minimum(count, remaining_budget), 0)
         has_abstract = state.red_session_is_abstract[r, target_host]
         budget_gap = blue_budget - suspicious_count
-        prefer_blue_budget = has_abstract & (blue_budget == count) & (budget_gap >= 2)
+        prefer_blue_budget = has_abstract & (blue_budget == count) & (
+            (budget_gap >= 2) | ((count <= 3) & (suspicious_count == (count - 1)))
+        )
         max_removable = jnp.where(
             prefer_blue_budget,
             remaining_budget,

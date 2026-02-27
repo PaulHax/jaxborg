@@ -102,6 +102,14 @@ Primary regression tests for parity bugs must be **explicit differential tests**
 
 Unit tests are allowed as secondary guardrails, but they do **not** replace the required differential regression for parity bugs.
 
+Hard rule for parity regressions:
+- Seed/step replay is triage only; do not commit replay-only regressions.
+- Do not commit tests that call `run_differential_fuzz(...)` as the main assertion.
+- Committed regression must be mechanism-explicit:
+  - set concrete preconditions that trigger the bug
+  - run matching CybORG and JAX actions
+  - assert the exact divergent field/value parity
+
 #### Good 4-step TDD loop (example)
 
 Example gap: `seed=0 step=130 host_compromised [host_80] cyborg=1 jax=0` caused by Blue `Remove`.
@@ -142,7 +150,7 @@ It returns a `MismatchReport` on the first error: seed, step, field name, CybORG
 ### Investigation workflow
 
 1. **Reproduce (TDD red)**: write a failing **explicit differential regression** that runs CybORG and JAX to the failing seed/step and asserts the exact mismatch context.
-   - Prefer the relevant subsystem file and explicit state setup; avoid brittle seed/step replay-only tests.
+   - Prefer the relevant subsystem file and explicit state setup; avoid seed/step replay-only tests.
    - Keep tests differential (pure CybORG + JAX in the same test), not JAX-only.
    - One gap at a time: stop on first mismatch, add test, fix, rerun.
 2. Place the test in the appropriate file:

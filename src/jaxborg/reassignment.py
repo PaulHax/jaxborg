@@ -7,6 +7,13 @@ host's subnet.
 
 import jax.numpy as jnp
 
+from jaxborg.actions.encoding import (
+    ACTION_TYPE_AGGRESSIVE_SCAN,
+    ACTION_TYPE_SCAN,
+    ACTION_TYPE_STEALTH_SCAN,
+    decode_red_action,
+)
+from jaxborg.actions.red_common import select_scan_execution_source_host
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_RED_AGENTS
 from jaxborg.state import CC4Const, CC4State
@@ -97,6 +104,35 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     red_scanned_hosts = state.red_scanned_hosts & ~(full_clear | via_removed)
     red_scanned_via = jnp.where(full_clear | via_removed, -1, state.red_scanned_via)
     host_suspicious_process = jnp.any(red_suspicious_process_count > 0, axis=0)
+    red_pending_source_host = state.red_pending_source_host
+
+    source_state = state.replace(
+        red_sessions=red_sessions,
+        red_session_is_abstract=red_session_is_abstract,
+        red_scan_anchor_host=red_scan_anchor_host,
+        red_scanned_hosts=red_scanned_hosts,
+        red_scanned_via=red_scanned_via,
+    )
+    for r in range(NUM_RED_AGENTS):
+        is_busy = state.red_pending_ticks[r] > 0
+        action_type, _, target_host = decode_red_action(state.red_pending_action[r], r, const)
+        is_scan_action = (
+            (action_type == ACTION_TYPE_SCAN)
+            | (action_type == ACTION_TYPE_AGGRESSIVE_SCAN)
+            | (action_type == ACTION_TYPE_STEALTH_SCAN)
+        )
+        source_host = red_pending_source_host[r]
+        source_idx = jnp.clip(source_host, 0, GLOBAL_MAX_HOSTS - 1)
+        source_valid = (
+            (source_host >= 0)
+            & red_sessions[r, source_idx]
+            & red_session_is_abstract[r, source_idx]
+            & const.host_active[source_idx]
+        )
+        rebound_source = select_scan_execution_source_host(source_state, const, r, target_host)
+        red_pending_source_host = red_pending_source_host.at[r].set(
+            jnp.where(is_busy & is_scan_action & ~source_valid, rebound_source, source_host)
+        )
 
     return state.replace(
         red_sessions=red_sessions,
@@ -112,4 +148,5 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         host_compromised=host_compromised,
         host_suspicious_process=host_suspicious_process,
         red_session_is_abstract=red_session_is_abstract,
+        red_pending_source_host=red_pending_source_host,
     )

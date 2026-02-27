@@ -8,10 +8,12 @@ from CybORG.Shared.Session import RedAbstractSession, Session
 from CybORG.Simulator.Actions import DiscoverRemoteSystems, Restore
 from CybORG.Simulator.Actions.AbstractActions.DiscoverNetworkServices import (
     AggressiveServiceDiscovery,
+    StealthServiceDiscovery,
 )
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
+from jaxborg.actions.duration import process_red_with_duration
 from jaxborg.actions.encoding import (
     ACTION_TYPE_SCAN,
     RED_SCAN_START,
@@ -582,3 +584,145 @@ class TestScanRequiresAbstractSession:
         assert not bool(new_state.red_session_is_abstract[agent_id, target]), (
             "Exploit-created sessions must NOT be abstract (CybORG creates plain Session, not RedAbstractSession)"
         )
+
+    def test_stale_abstract_flag_without_live_session_does_not_allow_scan_matches_cyborg(self):
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        cyborg_env = CybORG(scenario_generator=sg, seed=42)
+        cyborg_env.reset()
+        cy_state = cyborg_env.environment_controller.state
+
+        const = build_const_from_cyborg(cyborg_env)
+        mappings = build_mappings_from_cyborg(cyborg_env)
+
+        target = next(
+            h
+            for h in range(int(const.num_hosts))
+            if bool(const.host_active[h]) and not bool(const.host_is_router[h]) and h != int(const.red_start_hosts[0])
+        )
+        assert target is not None
+        target_ip = mappings.hostname_to_ip[mappings.idx_to_hostname[target]]
+
+        # CybORG baseline: queued scan with missing session id fails.
+        del cy_state.sessions["red_agent_0"][0]
+        cy_action = AggressiveServiceDiscovery(session=0, agent="red_agent_0", ip_address=target_ip)
+        cy_obs = cy_action.execute(cy_state)
+        assert str(cy_obs.success).upper() != "TRUE"
+
+        # JAX mirror: stale abstract bit without an active session must not pass scan preconditions.
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        start_host = int(const.red_start_hosts[0])
+        state = state.replace(
+            red_sessions=state.red_sessions.at[0, start_host].set(False),
+            red_session_is_abstract=state.red_session_is_abstract.at[0, start_host].set(True),
+            red_discovered_hosts=state.red_discovered_hosts.at[0, target].set(True),
+        )
+        scan_idx = encode_red_action("AggressiveServiceDiscovery", target, 0)
+        new_state = _jit_apply_red(state, const, 0, scan_idx, jax.random.PRNGKey(0))
+
+        assert not bool(new_state.red_scanned_hosts[0, target])
+
+
+class TestDeferredScanSessionBinding:
+    def test_deferred_scan_fails_if_bound_session_removed_before_execute_matches_cyborg(self):
+        """Deferred scan stays bound to the queued session id in CybORG."""
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        cyborg_env = CybORG(scenario_generator=sg, seed=42)
+        cyborg_env.reset()
+        controller = cyborg_env.environment_controller
+        cy_state = controller.state
+
+        const = build_const_from_cyborg(cyborg_env)
+        mappings = build_mappings_from_cyborg(cyborg_env)
+
+        red_agent_id = 0
+        red_agent_name = "red_agent_0"
+        anchor_host = int(const.red_start_hosts[red_agent_id])
+
+        same_subnet_hosts = [
+            h
+            for h in range(int(const.num_hosts))
+            if bool(const.host_active[h])
+            and not bool(const.host_is_router[h])
+            and int(const.host_subnet[h]) == int(const.host_subnet[anchor_host])
+            and h != anchor_host
+        ]
+        assert len(same_subnet_hosts) >= 2, "Need two extra hosts in the anchor subnet"
+        alt_host = same_subnet_hosts[0]
+        target_host = same_subnet_hosts[1]
+
+        cy_state.add_session(
+            RedAbstractSession(
+                ident=None,
+                hostname=mappings.idx_to_hostname[alt_host],
+                username="user",
+                agent=red_agent_name,
+                parent=0,
+                session_type="shell",
+                pid=None,
+            )
+        )
+
+        target_ip = mappings.hostname_to_ip[mappings.idx_to_hostname[target_host]]
+        deferred = StealthServiceDiscovery(session=0, agent=red_agent_name, ip_address=target_ip)
+        controller.actions_in_progress[red_agent_name] = {"action": deferred, "remaining_ticks": 1}
+
+        # Mechanism under test: remove queued session id 0 before execution tick.
+        del cy_state.sessions[red_agent_name][0]
+        controller.step(actions={}, skip_valid_action_check=True)
+
+        cy_scanned = False
+        for sess in cy_state.sessions.get(red_agent_name, {}).values():
+            if target_ip in getattr(sess, "ports", {}):
+                cy_scanned = True
+                break
+
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        state = state.replace(
+            red_sessions=state.red_sessions.at[red_agent_id, anchor_host].set(True).at[red_agent_id, alt_host].set(True),
+            red_session_count=state.red_session_count.at[red_agent_id, anchor_host]
+            .set(1)
+            .at[red_agent_id, alt_host]
+            .set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, anchor_host]
+            .set(True)
+            .at[red_agent_id, alt_host]
+            .set(True),
+            red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, target_host].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(anchor_host),
+            red_pending_ticks=state.red_pending_ticks.at[red_agent_id].set(1),
+            red_pending_action=state.red_pending_action.at[red_agent_id].set(
+                encode_red_action("StealthServiceDiscovery", target_host, red_agent_id)
+            ),
+            red_pending_key=state.red_pending_key.at[red_agent_id].set(jnp.array([1, 2], dtype=jnp.uint32)),
+            red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(anchor_host),
+        )
+
+        # Mirror CybORG precondition: bound source session (anchor/session 0) is gone.
+        state = state.replace(
+            red_sessions=state.red_sessions.at[red_agent_id, anchor_host].set(False),
+            red_session_count=state.red_session_count.at[red_agent_id, anchor_host].set(0),
+            red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, anchor_host].set(False),
+        )
+
+        key = jax.random.PRNGKey(7)
+        new_state = process_red_with_duration(state, const, red_agent_id, RED_SCAN_START + target_host, key)
+        jax_scanned = bool(new_state.red_scanned_hosts[red_agent_id, target_host])
+
+        assert not cy_scanned, "CybORG should fail deferred scan when queued session id is removed"
+        assert jax_scanned == cy_scanned, "JAX must match CybORG for deferred scan session binding"
