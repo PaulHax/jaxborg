@@ -6,6 +6,7 @@ from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
     MAX_DETECTION_RANDOMS,
     MAX_STEPS,
+    MAX_TRACKED_SUSPICIOUS_PIDS,
     MESSAGE_LENGTH,
     MISSION_PHASES,
     NUM_BLUE_AGENTS,
@@ -101,6 +102,10 @@ class CC4State:
 
     red_session_sandboxed: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool — sandboxed exploit sessions
     red_session_is_abstract: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool — True for exploit-created sessions
+    red_session_pid: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int32 — primary PID mirror for compatibility
+    red_session_pids: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS) int32
+    red_next_pid: chex.Array  # scalar int32 — next PID to allocate
+    blue_suspicious_pids: chex.Array  # (NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS) int32
 
     green_randoms: chex.Array  # (MAX_STEPS, GLOBAL_MAX_HOSTS, 7) float — precomputed green agent randoms
     use_green_randoms: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
@@ -182,6 +187,14 @@ def create_initial_state() -> CC4State:
         fsm_host_states=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
         red_session_sandboxed=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_session_is_abstract=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
+        red_session_pid=jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), -1, dtype=jnp.int32),
+        red_session_pids=jnp.full(
+            (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS), -1, dtype=jnp.int32
+        ),
+        red_next_pid=jnp.array(5000, dtype=jnp.int32),
+        blue_suspicious_pids=jnp.full(
+            (NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS), -1, dtype=jnp.int32
+        ),
         green_lwf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         green_asf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         detection_randoms=jnp.zeros(MAX_DETECTION_RANDOMS, dtype=jnp.float32),

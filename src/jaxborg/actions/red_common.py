@@ -2,8 +2,9 @@ import chex
 import jax
 import jax.numpy as jnp
 
+from jaxborg.actions.pids import append_pid_to_row, first_valid_pid
 from jaxborg.actions.session_counts import effective_session_counts
-from jaxborg.constants import ACTIVITY_EXPLOIT, COMPROMISE_USER, NUM_SUBNETS
+from jaxborg.constants import ACTIVITY_EXPLOIT, COMPROMISE_USER, NUM_BLUE_AGENTS, NUM_SUBNETS
 from jaxborg.state import CC4Const, CC4State
 
 
@@ -211,6 +212,29 @@ def apply_exploit_success(
         state.blue_suspicious_pid_budget.at[:, target_host].add(blue_budget_inc),
         state.blue_suspicious_pid_budget,
     )
+    new_pid = state.red_next_pid
+    red_next_pid = jnp.where(success, state.red_next_pid + 1, state.red_next_pid)
+    session_pid_row = state.red_session_pids[agent_id, target_host]
+    pid_row_updated = append_pid_to_row(session_pid_row, new_pid)
+    red_session_pids = jnp.where(
+        success,
+        state.red_session_pids.at[agent_id, target_host].set(pid_row_updated),
+        state.red_session_pids,
+    )
+    red_session_pid = jnp.where(
+        success,
+        state.red_session_pid.at[agent_id, target_host].set(first_valid_pid(pid_row_updated)),
+        state.red_session_pid,
+    )
+    blue_suspicious_pids = state.blue_suspicious_pids
+    for b in range(NUM_BLUE_AGENTS):
+        covers = const.blue_agent_hosts[b, target_host]
+        pid_row = blue_suspicious_pids[b, target_host]
+        updated_row = append_pid_to_row(pid_row, new_pid)
+        blue_suspicious_pids = blue_suspicious_pids.at[b, target_host].set(
+            jnp.where(success & covers, updated_row, pid_row)
+        )
+
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
@@ -218,9 +242,13 @@ def apply_exploit_success(
         red_session_many=red_session_many,
         red_suspicious_process_count=red_suspicious_process_count,
         red_privilege=red_privilege,
+        red_session_pid=red_session_pid,
+        red_session_pids=red_session_pids,
+        red_next_pid=red_next_pid,
         host_compromised=host_compromised,
         host_has_malware=host_has_malware,
         host_suspicious_process=host_suspicious_process,
         red_activity_this_step=activity,
         blue_suspicious_pid_budget=blue_suspicious_pid_budget,
+        blue_suspicious_pids=blue_suspicious_pids,
     )

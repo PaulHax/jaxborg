@@ -47,6 +47,16 @@ def apply_privesc(
         state.red_suspicious_process_count.at[agent_id, target_host].set(0),
         state.red_suspicious_process_count,
     )
+    red_session_pid = jnp.where(
+        is_active & has_session & is_sandboxed,
+        state.red_session_pid.at[agent_id, target_host].set(-1),
+        state.red_session_pid,
+    )
+    red_session_pids = jnp.where(
+        is_active & has_session & is_sandboxed,
+        state.red_session_pids.at[agent_id, target_host].set(-1),
+        state.red_session_pids,
+    )
 
     new_priv = jnp.where(success, COMPROMISE_PRIVILEGED, state.red_privilege[agent_id, target_host])
     red_privilege = jnp.where(
@@ -92,6 +102,8 @@ def apply_privesc(
         red_session_count=red_session_count,
         red_session_multiple=red_session_multiple,
         red_session_many=red_session_many,
+        red_session_pid=red_session_pid,
+        red_session_pids=red_session_pids,
         red_suspicious_process_count=red_suspicious_process_count,
         red_privilege=red_privilege,
         red_discovered_hosts=red_discovered_hosts,

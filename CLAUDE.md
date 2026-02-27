@@ -109,6 +109,7 @@ Hard rule for parity regressions:
   - set concrete preconditions that trigger the bug
   - run matching CybORG and JAX actions
   - assert the exact divergent field/value parity
+- If CybORG has a concrete mechanic/model that JAXborg lacks (e.g., PID/session identity, action lifecycle state), implement that model in `src/jaxborg/` rather than adding heuristic workaround logic.
 
 #### Good 4-step TDD loop (example)
 

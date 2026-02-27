@@ -5,6 +5,7 @@ each red session lives on the agent whose allowed_subnets includes the
 host's subnet.
 """
 
+import jax
 import jax.numpy as jnp
 
 from jaxborg.actions.encoding import (
@@ -13,9 +14,10 @@ from jaxborg.actions.encoding import (
     ACTION_TYPE_STEALTH_SCAN,
     decode_red_action,
 )
+from jaxborg.actions.pids import append_pid_to_row, first_valid_pid
 from jaxborg.actions.red_common import select_scan_execution_source_host
 from jaxborg.actions.session_counts import effective_session_counts
-from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_RED_AGENTS
+from jaxborg.constants import GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS, NUM_RED_AGENTS
 from jaxborg.state import CC4Const, CC4State
 
 
@@ -36,12 +38,14 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     transferred_count_sum = jnp.sum(transferred_count, axis=0)
     transferred_suspicious = jnp.where(needs_reassign, state.red_suspicious_process_count, 0)
     max_transferred_suspicious = jnp.max(transferred_suspicious, axis=0)
+    transferred_pid_rows = jnp.where(needs_reassign[:, :, None], state.red_session_pids, -1)
     any_transferred = jnp.any(needs_reassign, axis=0)
 
     red_session_count = jnp.where(needs_reassign, 0, session_counts)
     red_suspicious_process_count = jnp.where(needs_reassign, 0, state.red_suspicious_process_count)
     red_privilege = jnp.where(needs_reassign, 0, state.red_privilege)
     red_session_is_abstract = jnp.where(needs_reassign, False, state.red_session_is_abstract)
+    red_session_pids = jnp.where(needs_reassign[:, :, None], -1, state.red_session_pids)
     red_discovered = state.red_discovered_hosts
     for r in range(NUM_RED_AGENTS):
         is_dest = (host_owner == r) & any_transferred  # (GLOBAL_MAX_HOSTS,)
@@ -62,10 +66,24 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         red_session_is_abstract = red_session_is_abstract.at[r].set(
             jnp.where(is_dest, True, red_session_is_abstract[r])
         )
+        pid_rows_for_r = red_session_pids[r]
+        for src in range(NUM_RED_AGENTS):
+            for slot in range(MAX_TRACKED_SUSPICIOUS_PIDS):
+                incoming_pid = transferred_pid_rows[src, :, slot]
+                pid_rows_for_r = jax.vmap(
+                    lambda row, pid, do_assign: jnp.where(
+                        do_assign & (pid >= 0),
+                        append_pid_to_row(row, pid),
+                        row,
+                    )
+                )(pid_rows_for_r, incoming_pid, is_dest)
+        red_session_pids = red_session_pids.at[r].set(pid_rows_for_r)
 
     red_sessions = red_session_count > 0
     red_session_multiple = red_session_count > 1
     red_session_many = red_session_count > 2
+    red_session_pid = jax.vmap(jax.vmap(first_valid_pid))(red_session_pids)
+    red_session_pid = jnp.where(red_sessions, red_session_pid, -1)
 
     # Any host with an active red session must be discoverable by that red agent.
     red_discovered = red_discovered | red_sessions
@@ -139,6 +157,8 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         red_session_count=red_session_count,
         red_session_multiple=red_session_multiple,
         red_session_many=red_session_many,
+        red_session_pid=red_session_pid,
+        red_session_pids=red_session_pids,
         red_suspicious_process_count=red_suspicious_process_count,
         red_privilege=red_privilege,
         red_discovered_hosts=red_discovered,

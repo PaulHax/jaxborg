@@ -17,12 +17,14 @@ from jaxborg.actions.encoding import (
     encode_blue_action,
     encode_red_action,
 )
+from jaxborg.actions.pids import append_pid_to_row, first_valid_pid
 from jaxborg.constants import (
     ACTIVITY_EXPLOIT,
     COMPROMISE_NONE,
     COMPROMISE_PRIVILEGED,
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
+    MAX_TRACKED_SUSPICIOUS_PIDS,
     NUM_BLUE_AGENTS,
     SERVICE_IDS,
 )
@@ -93,6 +95,71 @@ def _setup_exploit(state, const, target_h):
     return state
 
 
+def _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts):
+    host_to_idx = {h: i for i, h in enumerate(sorted_hosts)}
+
+    modeled_hosts = (
+        state.red_sessions
+        | (state.red_session_count > 0)
+        | state.red_session_multiple
+        | state.red_session_many
+    )
+
+    cy_session_count = jnp.zeros_like(state.red_session_count)
+    cy_session_pids = jnp.full_like(state.red_session_pids, -1)
+    cy_privilege = jnp.zeros_like(state.red_privilege)
+    max_pid = int(state.red_next_pid)
+    for r in range(6):
+        agent_name = f"red_agent_{r}"
+        for sess in cyborg_state.sessions.get(agent_name, {}).values():
+            if sess.hostname not in host_to_idx:
+                continue
+            hidx = host_to_idx[sess.hostname]
+            cy_session_count = cy_session_count.at[r, hidx].add(1)
+            pid = int(getattr(sess, "pid", -1))
+            if pid >= 0:
+                row = cy_session_pids[r, hidx]
+                cy_session_pids = cy_session_pids.at[r, hidx].set(append_pid_to_row(row, pid))
+                max_pid = max(max_pid, pid + 1)
+            level = 2 if getattr(sess, "username", "") in ("root", "SYSTEM") else 1
+            cy_privilege = cy_privilege.at[r, hidx].set(jnp.maximum(cy_privilege[r, hidx], level))
+
+    red_session_count = jnp.where(modeled_hosts, cy_session_count, state.red_session_count)
+    red_sessions = jnp.where(modeled_hosts, red_session_count > 0, state.red_sessions)
+    red_session_multiple = jnp.where(modeled_hosts, red_session_count > 1, state.red_session_multiple)
+    red_session_many = jnp.where(modeled_hosts, red_session_count > 2, state.red_session_many)
+    red_privilege = jnp.where(modeled_hosts, cy_privilege, state.red_privilege)
+    red_session_pids = jnp.where(modeled_hosts[:, :, None], cy_session_pids, state.red_session_pids)
+
+    blue_suspicious_pids = state.blue_suspicious_pids
+    for b in range(NUM_BLUE_AGENTS):
+        agent_name = f"blue_agent_{b}"
+        for blue_sess in cyborg_state.sessions.get(agent_name, {}).values():
+            sus_pids = getattr(blue_sess, "sus_pids", {})
+            for hostname, pid_list in sus_pids.items():
+                if hostname not in host_to_idx:
+                    continue
+                hidx = host_to_idx[hostname]
+                row = jnp.full(MAX_TRACKED_SUSPICIOUS_PIDS, -1, dtype=jnp.int32)
+                for i, pid in enumerate(pid_list[:MAX_TRACKED_SUSPICIOUS_PIDS]):
+                    row = row.at[i].set(int(pid))
+                blue_suspicious_pids = blue_suspicious_pids.at[b, hidx].set(row)
+
+    red_session_pid = jax.vmap(jax.vmap(first_valid_pid))(red_session_pids)
+    red_session_pid = jnp.where(red_session_count > 0, red_session_pid, -1)
+    return state.replace(
+        red_sessions=red_sessions,
+        red_session_count=red_session_count,
+        red_session_multiple=red_session_multiple,
+        red_session_many=red_session_many,
+        red_privilege=red_privilege,
+        red_session_pid=red_session_pid,
+        red_session_pids=red_session_pids,
+        red_next_pid=jnp.int32(max_pid),
+        blue_suspicious_pids=blue_suspicious_pids,
+    )
+
+
 class TestBlueRemoveEncoding:
     def test_encode_remove(self):
         assert encode_blue_action("Remove", 5, 0) == BLUE_REMOVE_START + 5
@@ -123,6 +190,12 @@ class TestApplyBlueRemove:
 
         blue_idx = _find_blue_for_host(jax_const, target)
         assert blue_idx is not None
+        test_pid = 6001
+        state = state.replace(
+            red_session_pid=state.red_session_pid.at[0, target].set(test_pid),
+            red_session_pids=state.red_session_pids.at[0, target, 0].set(test_pid),
+            blue_suspicious_pids=state.blue_suspicious_pids.at[blue_idx, target, 0].set(test_pid),
+        )
 
         new_state = apply_blue_remove(state, jax_const, blue_idx, target)
         assert not bool(new_state.red_sessions[0, target])
@@ -144,6 +217,12 @@ class TestApplyBlueRemove:
 
         blue_idx = _find_blue_for_host(jax_const, target)
         assert blue_idx is not None
+        test_pid = 6002
+        state = state.replace(
+            red_session_pid=state.red_session_pid.at[0, target].set(test_pid).at[1, target].set(7001),
+            red_session_pids=state.red_session_pids.at[0, target, 0].set(test_pid).at[1, target, 0].set(7001),
+            blue_suspicious_pids=state.blue_suspicious_pids.at[blue_idx, target, 0].set(test_pid),
+        )
 
         new_state = apply_blue_remove(state, jax_const, blue_idx, target)
         assert bool(new_state.red_sessions[0, target])
@@ -157,6 +236,12 @@ class TestApplyBlueRemove:
 
         blue_idx = _find_blue_for_host(jax_const, target)
         assert blue_idx is not None
+        test_pid = 6002
+        state = state.replace(
+            red_session_pid=state.red_session_pid.at[0, target].set(test_pid).at[1, target].set(7001),
+            red_session_pids=state.red_session_pids.at[0, target, 0].set(test_pid).at[1, target, 0].set(7001),
+            blue_suspicious_pids=state.blue_suspicious_pids.at[blue_idx, target, 0].set(test_pid),
+        )
 
         new_state = apply_blue_remove(state, jax_const, blue_idx, target)
         np.testing.assert_array_equal(np.array(new_state.red_sessions), np.array(state.red_sessions))
@@ -182,6 +267,12 @@ class TestApplyBlueRemove:
 
         blue_idx = _find_blue_for_host(jax_const, target)
         assert blue_idx is not None
+        test_pid = 6002
+        state = state.replace(
+            red_session_pid=state.red_session_pid.at[0, target].set(test_pid).at[1, target].set(7001),
+            red_session_pids=state.red_session_pids.at[0, target, 0].set(test_pid).at[1, target, 0].set(7001),
+            blue_suspicious_pids=state.blue_suspicious_pids.at[blue_idx, target, 0].set(test_pid),
+        )
 
         new_state = apply_blue_remove(state, jax_const, blue_idx, target)
         assert not bool(new_state.red_sessions[0, target])
@@ -208,6 +299,12 @@ class TestApplyBlueRemove:
 
         blue_idx = _find_blue_for_host(jax_const, target)
         assert blue_idx is not None
+        test_pid = 6003
+        state = state.replace(
+            red_session_pid=state.red_session_pid.at[0, target].set(test_pid),
+            red_session_pids=state.red_session_pids.at[0, target, 0].set(test_pid),
+            blue_suspicious_pids=state.blue_suspicious_pids.at[blue_idx, target, 0].set(test_pid),
+        )
 
         jitted = jax.jit(apply_blue_remove, static_argnums=(2, 3))
         new_state = jitted(state, jax_const, blue_idx, target)
@@ -234,6 +331,12 @@ class TestRemoveViaDispatch:
 
         blue_idx = _find_blue_for_host(jax_const, target)
         assert blue_idx is not None
+        test_pid = 6004
+        state = state.replace(
+            red_session_pid=state.red_session_pid.at[0, target].set(test_pid),
+            red_session_pids=state.red_session_pids.at[0, target, 0].set(test_pid),
+            blue_suspicious_pids=state.blue_suspicious_pids.at[blue_idx, target, 0].set(test_pid),
+        )
 
         action_idx = encode_blue_action("Remove", target, blue_idx)
         new_state = _jit_apply_blue(state, jax_const, blue_idx, action_idx)
@@ -278,6 +381,8 @@ class TestDifferentialWithCybORG:
             host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
             host_has_malware=state.host_has_malware.at[target].set(True),
         )
+
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
 
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
@@ -334,6 +439,8 @@ class TestDifferentialWithCybORG:
             host_activity_detected=state.host_activity_detected.at[target].set(True),
         )
 
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
+
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
         cyborg_obs = remove_action.execute(cyborg_state)
@@ -389,6 +496,8 @@ class TestDifferentialWithCybORG:
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
             red_activity_this_step=state.red_activity_this_step.at[target].set(0),
         )
+
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
 
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
@@ -448,6 +557,8 @@ class TestDifferentialWithCybORG:
             blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(2),
         )
 
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
+
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
         cyborg_obs = remove_action.execute(cyborg_state)
@@ -504,6 +615,8 @@ class TestDifferentialWithCybORG:
             red_suspicious_process_count=state.red_suspicious_process_count.at[1, target].set(0),
             blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(1),
         )
+
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
 
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
@@ -562,6 +675,8 @@ class TestDifferentialWithCybORG:
             blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(2),
         )
 
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
+
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
         cyborg_obs = remove_action.execute(cyborg_state)
@@ -618,6 +733,8 @@ class TestDifferentialWithCybORG:
             blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(4),
         )
 
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
+
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
         cyborg_obs = remove_action.execute(cyborg_state)
@@ -634,6 +751,74 @@ class TestDifferentialWithCybORG:
         assert not cyborg_has_user_session
         assert bool(new_state.red_sessions[1, target]) == cyborg_has_user_session
         assert int(new_state.red_privilege[1, target]) == COMPROMISE_NONE
+        assert int(new_state.host_compromised[target]) == COMPROMISE_NONE
+
+    def test_remove_with_exact_budget_on_scanned_activity_abstract_session_clears_user_session_matches_cyborg(
+        self, cyborg_and_jax
+    ):
+        cyborg_env, const, state = cyborg_and_jax
+        cyborg_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cyborg_state.hosts.keys())
+
+        target = _find_host_in_subnet(const, "RESTRICTED_ZONE_B")
+        assert target is not None
+        target_hostname = sorted_hosts[target]
+
+        blue_idx = _find_blue_for_host(const, target)
+        assert blue_idx is not None
+
+        red_session = RedAbstractSession(
+            ident=None,
+            hostname=target_hostname,
+            username="user",
+            agent="red_agent_3",
+            parent=0,
+            session_type="shell",
+            pid=None,
+        )
+        cyborg_state.add_session(red_session)
+
+        cy_red_sess = next(s for s in cyborg_state.sessions["red_agent_3"].values() if s.hostname == target_hostname)
+        target_ip = next(ip for ip, host in cyborg_state.ip_addresses.items() if host == target_hostname)
+        cy_red_sess.addport(target_ip, 22)
+        blue_parent = cyborg_state.sessions[f"blue_agent_{blue_idx}"][0]
+        blue_parent.add_sus_pids(hostname=target_hostname, pid=cy_red_sess.pid)
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[3, target].set(True),
+            red_session_is_abstract=state.red_session_is_abstract.at[3, target].set(True),
+            red_privilege=state.red_privilege.at[3, target].set(COMPROMISE_USER),
+            red_scanned_hosts=state.red_scanned_hosts.at[3, target].set(True),
+            red_pending_ticks=state.red_pending_ticks.at[3].set(3),
+            red_pending_action=state.red_pending_action.at[3].set(
+                encode_red_action("ExploitRemoteService_cc4SSHBruteForce", target, 3)
+            ),
+            host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
+            host_has_malware=state.host_has_malware.at[target].set(False),
+            host_activity_detected=state.host_activity_detected.at[target].set(True),
+            host_suspicious_process=state.host_suspicious_process.at[target].set(False),
+            red_suspicious_process_count=state.red_suspicious_process_count.at[3, target].set(0),
+            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(1),
+        )
+
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
+
+        remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
+        remove_action.duration = 1
+        cyborg_obs = remove_action.execute(cyborg_state)
+        assert cyborg_obs.success
+
+        action_idx = encode_blue_action("Remove", target, blue_idx)
+        new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
+
+        cyborg_red_sessions = [
+            s for s in cyborg_state.sessions["red_agent_3"].values() if s.hostname == target_hostname
+        ]
+        cyborg_has_user_session = any(not s.has_privileged_access() for s in cyborg_red_sessions)
+
+        assert not cyborg_has_user_session
+        assert bool(new_state.red_sessions[3, target]) == cyborg_has_user_session
+        assert int(new_state.red_privilege[3, target]) == COMPROMISE_NONE
         assert int(new_state.host_compromised[target]) == COMPROMISE_NONE
 
     def test_remove_with_stale_multi_budget_on_unscanned_non_malware_host_keeps_user_session_matches_cyborg(
@@ -678,6 +863,8 @@ class TestDifferentialWithCybORG:
             red_suspicious_process_count=state.red_suspicious_process_count.at[3, target].set(0),
             blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(4),
         )
+
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
 
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
@@ -734,6 +921,8 @@ class TestDifferentialWithCybORG:
             host_activity_detected=state.host_activity_detected.at[target].set(True),
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
         )
+
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
 
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
@@ -803,6 +992,8 @@ class TestDifferentialWithCybORG:
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
         )
 
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
+
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
         cyborg_obs = remove_action.execute(cyborg_state)
@@ -861,6 +1052,8 @@ class TestDifferentialWithCybORG:
             host_has_malware=state.host_has_malware.at[target].set(True),
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
         )
+
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
 
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
@@ -924,6 +1117,8 @@ class TestDifferentialWithCybORG:
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
         )
 
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
+
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
         cyborg_obs = remove_action.execute(cyborg_state)
@@ -986,6 +1181,8 @@ class TestDifferentialWithCybORG:
             host_activity_detected=state.host_activity_detected.at[target].set(True),
         )
 
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
+
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
         cyborg_obs = remove_action.execute(cyborg_state)
@@ -1046,6 +1243,8 @@ class TestDifferentialWithCybORG:
             host_activity_detected=state.host_activity_detected.at[target].set(True),
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
         )
+
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
 
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
@@ -1126,6 +1325,8 @@ class TestDifferentialWithCybORG:
             blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(3),
         )
 
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
+
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
         cyborg_obs = remove_action.execute(cyborg_state)
@@ -1204,6 +1405,8 @@ class TestDifferentialWithCybORG:
             host_activity_detected=state.host_activity_detected.at[target].set(False),
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
         )
+
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
 
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
@@ -1293,6 +1496,8 @@ class TestDifferentialWithCybORG:
             blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(2),
         )
 
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
+
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
         cyborg_obs = remove_action.execute(cyborg_state)
@@ -1376,6 +1581,8 @@ class TestDifferentialWithCybORG:
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
             blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(2),
         )
+
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
 
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
@@ -1461,6 +1668,8 @@ class TestDifferentialWithCybORG:
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
             blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(3),
         )
+
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
 
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
@@ -1549,6 +1758,8 @@ class TestDifferentialWithCybORG:
             blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(5),
         )
 
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
+
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
         cyborg_obs = remove_action.execute(cyborg_state)
@@ -1636,6 +1847,8 @@ class TestDifferentialWithCybORG:
             blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(2),
         )
 
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
+
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1
         cyborg_obs = remove_action.execute(cyborg_state)
@@ -1702,6 +1915,8 @@ class TestDifferentialWithCybORG:
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
             blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(5),
         )
+
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
 
         remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         remove_action.duration = 1

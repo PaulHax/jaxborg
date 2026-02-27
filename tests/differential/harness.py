@@ -18,8 +18,9 @@ from jaxborg.actions.encoding import (
     RED_SLEEP,
     decode_red_action,
 )
-from jaxborg.actions.red_common import select_scan_execution_source_host
 from jaxborg.actions.green import apply_green_agents
+from jaxborg.actions.pids import append_pid_to_row, first_valid_pid
+from jaxborg.actions.red_common import select_scan_execution_source_host
 from jaxborg.agents.fsm_red import (
     fsm_red_get_action_and_info,
     fsm_red_init_states,
@@ -27,6 +28,7 @@ from jaxborg.agents.fsm_red import (
 )
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
+    MAX_TRACKED_SUSPICIOUS_PIDS,
     NUM_BLUE_AGENTS,
     NUM_RED_AGENTS,
 )
@@ -260,6 +262,13 @@ class CC4DifferentialHarness:
         start_scanned_via = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), -1, dtype=jnp.int32)
         start_scan_anchor = jnp.full((NUM_RED_AGENTS,), -1, dtype=jnp.int32)
         start_abstract = jnp.zeros_like(self.jax_state.red_session_is_abstract)
+        start_session_pids = jnp.full(
+            (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS), -1, dtype=jnp.int32
+        )
+        max_pid_seen = 4999
+        start_blue_suspicious_pids = jnp.full(
+            (NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS), -1, dtype=jnp.int32
+        )
         host_compromised = self.jax_state.host_compromised
         fsm_states = self.jax_state.fsm_host_states
         for agent_name, sessions in cyborg_state.sessions.items():
@@ -276,6 +285,13 @@ class CC4DifferentialHarness:
                     start_discovered = start_discovered.at[red_idx, hidx].set(True)
                     if isinstance(sess, RedAbstractSession):
                         start_abstract = start_abstract.at[red_idx, hidx].set(True)
+                    sess_pid = int(getattr(sess, "pid", -1))
+                    if sess_pid >= 0:
+                        max_pid_seen = max(max_pid_seen, sess_pid)
+                        pid_row = start_session_pids[red_idx, hidx]
+                        start_session_pids = start_session_pids.at[red_idx, hidx].set(
+                            append_pid_to_row(pid_row, sess_pid)
+                        )
                     level = 1
                     if hasattr(sess, "username") and sess.username in ("root", "SYSTEM"):
                         level = 2
@@ -296,12 +312,33 @@ class CC4DifferentialHarness:
             if self.jax_const.red_agent_active[red_idx]:
                 fsm_states = fsm_states.at[red_idx].set(fsm_red_init_states(self.jax_const, red_idx))
 
+        for b in range(NUM_BLUE_AGENTS):
+            blue_sessions = cyborg_state.sessions.get(f"blue_agent_{b}", {})
+            for blue_sess in blue_sessions.values():
+                sus_pids = getattr(blue_sess, "sus_pids", {})
+                for hostname, pid_list in sus_pids.items():
+                    if hostname not in self.mappings.hostname_to_idx:
+                        continue
+                    hidx = self.mappings.hostname_to_idx[hostname]
+                    slot = 0
+                    for pid in pid_list:
+                        if slot >= MAX_TRACKED_SUSPICIOUS_PIDS:
+                            break
+                        start_blue_suspicious_pids = start_blue_suspicious_pids.at[b, hidx, slot].set(int(pid))
+                        slot += 1
+
+        start_session_pid = jax.vmap(jax.vmap(first_valid_pid))(start_session_pids)
+        start_session_pid = jnp.where(start_session_count > 0, start_session_pid, -1)
         self.jax_state = self.jax_state.replace(
             red_sessions=start_sessions,
             red_session_count=start_session_count,
             red_session_multiple=start_session_count > 1,
             red_session_many=start_session_count > 2,
             red_privilege=start_priv,
+            red_session_pid=start_session_pid,
+            red_session_pids=start_session_pids,
+            red_next_pid=jnp.array(max_pid_seen + 1, dtype=jnp.int32),
+            blue_suspicious_pids=start_blue_suspicious_pids,
             red_discovered_hosts=start_discovered,
             red_scanned_hosts=start_scanned,
             red_scanned_via=start_scanned_via,
