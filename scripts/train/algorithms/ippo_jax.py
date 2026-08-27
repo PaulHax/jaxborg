@@ -27,6 +27,7 @@ if "JAX_COMPILATION_CACHE_DIR" not in os.environ:
 os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "0")
 
 import argparse
+import copy
 import json
 import sys
 import time
@@ -42,18 +43,36 @@ from jaxmarl.wrappers.baselines import LogWrapper
 
 # Make `import jaxborg.*` work when invoked as a script.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
+from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
 from jaxborg.actions.masking import compute_blue_action_mask
-from jaxborg.checkpoint import save_jax_params, write_sidecar
+from jaxborg.checkpoint import (
+    PolicyBundleEntry,
+    load_jax_policy,
+    read_sidecar,
+    save_jax_bundle,
+    write_sidecar,
+)
+from jaxborg.constants import BLUE_OBS_SIZE
 from jaxborg.evaluation.jax_env_factory import make_jax_env
-from jaxborg.metrics_schema import make_row
-from jaxborg.mlflow_setup import start_run
+from jaxborg.evaluation.training_checkpoint import evaluate_training_checkpoint
+from jaxborg.learned_red import RED_OBS_SIZE, RED_POLICY_ACTION_DIM
+from jaxborg.metrics_schema import add_team_metrics, make_row
+from jaxborg.mlflow_setup import MlflowCheckpointEvaluator, start_run
 from jaxborg.policies import make_jax_policy
 from jaxborg.recipe import load as load_recipe
-from jaxborg.recipe import project_jax
+from jaxborg.recipe import (
+    project_jax,
+    resolve_train_opponents,
+    team_recipe,
+    training_teams,
+)
 from jaxborg.scenarios.cc4.game_variant import GameVariant
+from scripts.train.algorithms.ippo_jax_joint import initial_reward_norm_state, make_joint_train
 
 
 class Transition(NamedTuple):
@@ -149,6 +168,8 @@ def make_train(config, network):
             avail_batch = _mask_over_agents(env_state.env_state.const, _agent_ids, env_state.env_state.state).transpose(
                 1, 0, 2
             )
+            sleep_only = jnp.zeros(avail_batch.shape[-1], dtype=jnp.bool_).at[0].set(True)
+            avail_batch = jnp.where(busy_batch[..., None], sleep_only, avail_batch)
             rng, _rng = jax.random.split(rng)
             flat_obs = obs_batch.reshape(-1, obs_batch.shape[-1])
             flat_avail = avail_batch.reshape(-1, avail_batch.shape[-1])
@@ -222,18 +243,23 @@ def make_train(config, network):
             unroll=8,
         )
         targets = advantages + traj_batch.value
-        policy_mask = jnp.ones_like(traj_batch.blue_busy)
+        # CybORG ignores submissions while an action is in progress. Force
+        # Sleep above and omit those rows from the actor objective while still
+        # retaining them in GAE/value learning for delayed-action credit.
+        policy_mask = 1.0 - traj_batch.blue_busy
 
         def _update_epoch(update_state, unused):
             def _update_minibatch(train_state, batch_info):
                 traj_batch, advantages, targets, policy_mask = batch_info
 
                 def _loss_fn(params, traj_batch, gae, targets, policy_mask):
-                    gae = (gae - gae.mean()) / (gae.std() + 1e-8)
-                    pi, value = network.apply(params, traj_batch.obs, traj_batch.avail_actions)
-                    log_prob = pi.log_prob(traj_batch.action)
                     policy_weight = policy_mask.astype(jnp.float32)
                     policy_count = jnp.maximum(policy_weight.sum(), 1.0)
+                    gae_mean = jnp.sum(policy_weight * gae) / policy_count
+                    gae_var = jnp.sum(policy_weight * jnp.square(gae - gae_mean)) / policy_count
+                    gae = (gae - gae_mean) / (jnp.sqrt(gae_var) + 1e-8)
+                    pi, value = network.apply(params, traj_batch.obs, traj_batch.avail_actions)
+                    log_prob = pi.log_prob(traj_batch.action)
                     value_loss = compute_value_loss(
                         value,
                         traj_batch.value,
@@ -313,6 +339,272 @@ def make_train(config, network):
 EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 
 
+def _network_from_arch(arch: dict, action_dim: int):
+    return make_jax_policy(
+        arch["name"],
+        action_dim=action_dim,
+        hidden_dim=int(arch.get("hidden_dim", 256)),
+        hidden_layers=int(arch.get("hidden_layers", 2)),
+        activation=arch.get("activation", "tanh"),
+    )
+
+
+def _legacy_arch_from_sidecar(path: Path, team: str) -> dict:
+    sidecar = read_sidecar(path)
+    return dict(team_recipe(sidecar, team)["arch"])
+
+
+def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
+    """Train or freeze independent Blue/Red policies in a joint JAX rollout."""
+    trainable_teams = training_teams(recipe)
+    configs = {team: project_jax(recipe, team=team) for team in ("blue", "red")}
+    for config in configs.values():
+        config["SEED"] = args.seed
+
+    opponent_paths = resolve_train_opponents(recipe, backend="jax", exp_dir=EXP_DIR)
+    dims = {
+        "blue": (BLUE_OBS_SIZE, BLUE_ALLOW_TRAFFIC_END),
+        "red": (RED_OBS_SIZE, RED_POLICY_ACTION_DIM),
+    }
+    networks = {}
+    initial_params = {}
+    arches = {}
+    sources = {}
+
+    for team in ("blue", "red"):
+        obs_dim, action_dim = dims[team]
+        if team in trainable_teams:
+            arch = dict(team_recipe(recipe, team)["arch"])
+            source = {"kind": "fresh", "seed": int(args.seed)}
+        else:
+            if team not in opponent_paths:
+                raise ValueError(f"joint training requires a learned {team} opponent model")
+            path = opponent_paths[team]
+            entry = load_jax_policy(
+                path,
+                team=team,
+                expected_obs_dim=obs_dim,
+                expected_action_dim=action_dim,
+            )
+            arch = dict(entry.arch) if entry.arch.get("name") else _legacy_arch_from_sidecar(path, team)
+            initial_params[team] = entry.weights
+            source = {
+                "kind": "checkpoint",
+                "path": str(path),
+                "bundle_source": entry.source,
+            }
+        arches[team] = arch
+        sources[team] = source
+        networks[team] = _network_from_arch(arch, action_dim)
+
+    print("=" * 60, flush=True)
+    print(f"IPPO-JAX joint [{recipe['meta']['name']}] seed={args.seed}", flush=True)
+    print(
+        f"  trainable={','.join(trainable_teams)} num_envs={configs['blue']['NUM_ENVS']} "
+        f"num_steps={configs['blue']['NUM_STEPS']} total_timesteps={configs['blue']['TOTAL_TIMESTEPS']:,}",
+        flush=True,
+    )
+    for team in ("blue", "red"):
+        print(
+            f"  {team}: arch={arches[team]['name']} hidden_dim={arches[team].get('hidden_dim', 256)} "
+            f"status={'trainable' if team in trainable_teams else 'frozen'}",
+            flush=True,
+        )
+    print("=" * 60, flush=True)
+
+    checkpoint_evaluator = MlflowCheckpointEvaluator(recipe)
+    run = start_run(recipe, backend="jax", seed=args.seed)
+    train_run_id = run.info.run_id
+    t0 = time.perf_counter()
+    env, obs, env_state, init_states, collect_and_update = make_joint_train(
+        configs,
+        networks,
+        trainable_teams=trainable_teams,
+        initial_params=initial_params,
+    )
+    del env
+    rng = jax.random.PRNGKey(args.seed + 1)
+    rng, init_key = jax.random.split(rng)
+    train_states = init_states(init_key)
+    reward_norm_states = {team: initial_reward_norm_state(configs[team]["NUM_ENVS"]) for team in ("blue", "red")}
+    print(f"  env+networks setup: {time.perf_counter() - t0:.1f}s", flush=True)
+
+    num_updates = int(configs["blue"]["NUM_UPDATES"])
+    if num_updates < 1:
+        raise ValueError("total_timesteps must cover at least one joint rollout")
+    num_steps = int(configs["blue"]["NUM_STEPS"])
+    num_envs = int(configs["blue"]["NUM_ENVS"])
+    metrics_path = save_dir / "metrics.jsonl"
+    start = time.perf_counter()
+    final_metrics = None
+
+    def save_bundle(path: Path, env_steps: int) -> None:
+        policies = {
+            team: PolicyBundleEntry(
+                weights=train_states[team].params,
+                team=team,
+                obs_dim=dims[team][0],
+                action_dim=dims[team][1],
+                arch=arches[team],
+                trainable=team in trainable_teams,
+                source=sources[team],
+            )
+            for team in ("blue", "red")
+        }
+        save_jax_bundle(
+            path,
+            policies,
+            provenance={
+                "recipe": recipe["meta"]["name"],
+                "seed": int(args.seed),
+                "total_steps": int(env_steps),
+                "train_run_id": train_run_id,
+            },
+        )
+
+    print(f"Starting joint training ({num_updates} updates)...", flush=True)
+    with metrics_path.open("w") as metrics_file:
+        for update_idx in range(num_updates):
+            train_states, env_state, obs, rng, reward_norm_states, metrics = collect_and_update(
+                train_states,
+                env_state,
+                obs,
+                rng,
+                reward_norm_states,
+            )
+            metrics = jax.device_get(metrics)
+            final_metrics = metrics
+            if update_idx == 0:
+                print(f"  first update compiled+ran in {time.perf_counter() - start:.1f}s", flush=True)
+
+            env_steps = (update_idx + 1) * num_steps * num_envs
+            elapsed = time.perf_counter() - start
+            sps = env_steps / elapsed if elapsed > 0 else 0.0
+            primary_team = "blue" if "blue" in trainable_teams else "red"
+            primary = metrics[primary_team]
+            blue = metrics["blue"]
+            row = make_row(
+                update_idx=update_idx + 1,
+                env_steps=env_steps,
+                wall_time_s=elapsed,
+                throughput_sps=sps,
+                loss_policy=float(primary["actor_loss"]),
+                loss_value=float(primary["critic_loss"]),
+                loss_entropy=float(primary["entropy"]),
+                loss_total=float(primary["total_loss"]),
+                ppo_kl_divergence=float(primary["approx_kl"]),
+                ppo_clip_fraction=float(primary["clip_frac"]),
+                ppo_explained_variance=float(primary["explained_var"]),
+                lr=float(configs[primary_team]["LR"]),
+                train_episode_reward_mean=float(blue["raw_rollout_return"]),
+                ppo_grad_norm=float(primary["grad_norm"]),
+                ppo_pre_clip_grad_norm=float(primary["pre_clip_grad_norm"]),
+                backend_extras={"jax.game.red_return": float(metrics["game"]["red_return"])},
+            )
+            metric_names = {
+                "actor_loss": "loss_policy",
+                "critic_loss": "loss_value",
+                "entropy": "loss_entropy",
+                "total_loss": "loss_total",
+                "approx_kl": "ppo_kl_divergence",
+                "clip_frac": "ppo_clip_fraction",
+                "explained_var": "ppo_explained_variance",
+                "grad_norm": "ppo_grad_norm",
+                "pre_clip_grad_norm": "ppo_pre_clip_grad_norm",
+                "raw_rollout_return": "return",
+                "mean_rollout_return": "normalized_return",
+                "actor_fraction": "actor_fraction",
+                "critic_fraction": "critic_fraction",
+            }
+            for team in ("blue", "red"):
+                add_team_metrics(
+                    row,
+                    team,
+                    {metric_names[key]: float(metrics[team][key]) for key in metric_names},
+                )
+                row[f"team.{team}.lr"] = float(configs[team]["LR"])
+                row[f"team.{team}.trainable"] = team in trainable_teams
+            metrics_file.write(json.dumps(row) + "\n")
+            metrics_file.flush()
+            mlflow.log_metrics(
+                {
+                    key: value
+                    for key, value in row.items()
+                    if isinstance(value, (int, float)) and not isinstance(value, bool) and key != "update_idx"
+                },
+                step=env_steps,
+            )
+            if (update_idx + 1) % 50 == 0 or update_idx == num_updates - 1:
+                print(
+                    f"  upd {update_idx + 1}/{num_updates} step {env_steps:,} "
+                    f"blue {metrics['game']['blue_return']:.1f} red {metrics['game']['red_return']:.1f} "
+                    f"{sps:.0f} sps",
+                    flush=True,
+                )
+
+            checkpoint_every = int(configs["blue"].get("CHECKPOINT_EVERY_UPDATES", 50))
+            is_final = update_idx == num_updates - 1
+            previous_steps = update_idx * num_steps * num_envs
+            eval_due = checkpoint_evaluator.due(previous_steps, env_steps, final=is_final)
+            periodic_checkpoint = checkpoint_every > 0 and (update_idx + 1) % checkpoint_every == 0
+            if periodic_checkpoint or is_final or eval_due:
+                name = f"model_{tag}.safetensors" if is_final else f"checkpoint_{env_steps}.safetensors"
+                checkpoint_path = save_dir / name
+                save_bundle(checkpoint_path, env_steps)
+                sidecar_name = f"recipe_{tag}.yaml" if is_final else f"recipe_checkpoint_{env_steps}.yaml"
+                sidecar_path = write_sidecar(
+                    save_dir / sidecar_name,
+                    recipe,
+                    seed=args.seed,
+                    total_steps=env_steps,
+                    backend="jax",
+                    train_run_id=train_run_id,
+                    extra={
+                        "trainable_teams": list(trainable_teams),
+                        "policy_sources": sources,
+                        "model": name,
+                    },
+                )
+                if eval_due:
+                    print(
+                        f"  MLflow checkpoint evaluation at step {env_steps:,}; "
+                        f"evaluating {checkpoint_evaluator.settings.episodes} episodes...",
+                        flush=True,
+                    )
+                    try:
+                        checkpoint_evaluator.on_checkpoint(
+                            checkpoint_path,
+                            sidecar_path,
+                            env_steps=env_steps,
+                            evaluate_fn=lambda episodes: evaluate_training_checkpoint(
+                                checkpoint_path,
+                                backend="jax",
+                                recipe=recipe,
+                                seed=args.seed,
+                                episodes=episodes,
+                            ),
+                        )
+                    finally:
+                        if not is_final and checkpoint_every <= 0:
+                            checkpoint_path.unlink(missing_ok=True)
+                            sidecar_path.unlink(missing_ok=True)
+
+    elapsed = time.perf_counter() - start
+    sps = int(configs["blue"]["TOTAL_TIMESTEPS"]) / elapsed if elapsed > 0 else 0.0
+    final_reward = float(final_metrics["game"]["blue_return"]) if final_metrics is not None else float("nan")
+    mlflow.log_metrics({"wall_time_sec": elapsed, "steps_per_second": sps, "final_reward": final_reward})
+    mlflow.log_artifact(str(metrics_path))
+    final_model = save_dir / f"model_{tag}.safetensors"
+    sidecar = save_dir / f"recipe_{tag}.yaml"
+    if final_model.exists():
+        mlflow.log_artifact(str(final_model))
+    if sidecar.exists():
+        mlflow.log_artifact(str(sidecar))
+    mlflow.end_run()
+    print(f"\nDone in {elapsed:.1f}s ({sps:,.0f} sps). Blue score: {final_reward:.1f}")
+    print(f"Saved to: {save_dir}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="IPPO-FF on JAX, recipe-driven")
     parser.add_argument("--recipe", required=True, help="Recipe name (e.g. 'singh') or path to YAML")
@@ -322,13 +614,15 @@ def main():
     parser.add_argument("--num-envs", type=int, default=None, help="Override recipe.jax.num_envs")
     args = parser.parse_args()
 
-    recipe = load_recipe(args.recipe)
+    recipe = copy.deepcopy(load_recipe(args.recipe))
+    # Apply CLI overrides to the resolved recipe itself so the exported
+    # sidecar describes the run that actually happened.
+    if args.total_timesteps is not None:
+        recipe["train"]["total_timesteps"] = int(args.total_timesteps)
+    if args.num_envs is not None:
+        recipe.setdefault("jax", {})["num_envs"] = int(args.num_envs)
     config = project_jax(recipe)
     config["SEED"] = args.seed
-    if args.total_timesteps is not None:
-        config["TOTAL_TIMESTEPS"] = args.total_timesteps
-    if args.num_envs is not None:
-        config["NUM_ENVS"] = args.num_envs
 
     tag = args.tag or f"{recipe['meta']['name']}_seed{args.seed}"
     save_dir = EXP_DIR / "ippo_jax" / tag
@@ -338,6 +632,12 @@ def main():
     if cache_dir:
         Path(cache_dir).mkdir(parents=True, exist_ok=True)
         print(f"XLA compilation cache: {cache_dir}", flush=True)
+
+    teams = training_teams(recipe)
+    learned_red = "red" in teams or bool(recipe.get("train", {}).get("opponents", {}).get("red"))
+    if learned_red:
+        _run_joint_training(args, recipe, tag, save_dir)
+        return
 
     # Build a throwaway env to get action_dim for network init.
     variant: GameVariant = config["TRAIN_VARIANT"]
@@ -368,6 +668,7 @@ def main():
     print(f"  arch={recipe['arch']['name']} hidden_dim={config['HIDDEN_DIM']}")
     print("=" * 60, flush=True)
 
+    checkpoint_evaluator = MlflowCheckpointEvaluator(recipe)
     run = start_run(recipe, backend="jax", seed=args.seed)
     train_run_id = run.info.run_id
 
@@ -434,7 +735,6 @@ def main():
             {k: v for k, v in row.items() if isinstance(v, (int, float)) and k != "update_idx"},
             step=env_steps,
         )
-
         if (update_idx + 1) % 50 == 0 or update_idx == num_updates - 1:
             print(
                 f"  upd {update_idx + 1}/{num_updates} step {env_steps:,} "
@@ -443,19 +743,65 @@ def main():
             )
 
         ckpt_every = int(config.get("CHECKPOINT_EVERY_UPDATES", 50))
-        if (update_idx + 1) % ckpt_every == 0 or update_idx == num_updates - 1:
-            is_final = update_idx == num_updates - 1
+        is_final = update_idx == num_updates - 1
+        previous_steps = update_idx * num_steps * num_envs
+        eval_due = checkpoint_evaluator.due(previous_steps, env_steps, final=is_final)
+        periodic_checkpoint = ckpt_every > 0 and (update_idx + 1) % ckpt_every == 0
+        if periodic_checkpoint or is_final or eval_due:
             ckpt_path = save_dir / (f"model_{tag}.safetensors" if is_final else f"checkpoint_{env_steps}.safetensors")
-            save_jax_params(ckpt_path, train_state.params, action_dim=action_dim)
-            if is_final:
-                write_sidecar(
-                    save_dir / f"recipe_{tag}.yaml",
-                    recipe,
-                    seed=args.seed,
-                    total_steps=env_steps,
-                    backend="jax",
-                    train_run_id=train_run_id,
+            save_jax_bundle(
+                ckpt_path,
+                {
+                    "blue": PolicyBundleEntry(
+                        weights=train_state.params,
+                        team="blue",
+                        obs_dim=BLUE_OBS_SIZE,
+                        action_dim=action_dim,
+                        arch=dict(recipe["arch"]),
+                        trainable=True,
+                        source={"kind": "fresh", "seed": int(args.seed)},
+                    )
+                },
+                provenance={
+                    "recipe": recipe["meta"]["name"],
+                    "seed": int(args.seed),
+                    "total_steps": int(env_steps),
+                    "train_run_id": train_run_id,
+                },
+            )
+            sidecar_name = f"recipe_{tag}.yaml" if is_final else f"recipe_checkpoint_{env_steps}.yaml"
+            sidecar_path = write_sidecar(
+                save_dir / sidecar_name,
+                recipe,
+                seed=args.seed,
+                total_steps=env_steps,
+                backend="jax",
+                train_run_id=train_run_id,
+                extra={"trainable_teams": ["blue"], "model": ckpt_path.name},
+            )
+            if eval_due:
+                print(
+                    f"  MLflow checkpoint evaluation at step {env_steps:,}; "
+                    f"evaluating {checkpoint_evaluator.settings.episodes} episodes...",
+                    flush=True,
                 )
+                try:
+                    checkpoint_evaluator.on_checkpoint(
+                        ckpt_path,
+                        sidecar_path,
+                        env_steps=env_steps,
+                        evaluate_fn=lambda episodes: evaluate_training_checkpoint(
+                            ckpt_path,
+                            backend="jax",
+                            recipe=recipe,
+                            seed=args.seed,
+                            episodes=episodes,
+                        ),
+                    )
+                finally:
+                    if not is_final and ckpt_every <= 0:
+                        ckpt_path.unlink(missing_ok=True)
+                        sidecar_path.unlink(missing_ok=True)
 
     metrics_file.close()
     elapsed = time.perf_counter() - start
@@ -463,6 +809,9 @@ def main():
     final_reward = float(final_metric["raw_rollout_return"]) if final_metric is not None else float("nan")
     mlflow.log_metrics({"wall_time_sec": elapsed, "steps_per_second": sps, "final_reward": final_reward})
     mlflow.log_artifact(str(metrics_path))
+    final_model = save_dir / f"model_{tag}.safetensors"
+    if final_model.exists():
+        mlflow.log_artifact(str(final_model))
     sidecar = save_dir / f"recipe_{tag}.yaml"
     if sidecar.exists():
         mlflow.log_artifact(str(sidecar))

@@ -41,13 +41,110 @@ jobs:
       - run: uv run pytest
 
   test-slow:
-    name: pytest (slow)
+    name: pytest (slow) ${{ matrix.group }}/8
     runs-on: ubuntu-latest
-    timeout-minutes: 600
+    # Cold-cache headroom: with no aggregated .test_durations yet,
+    # pytest-split round-robins by test count and heavy parametrized
+    # tests cluster into a couple of shards. Once aggregate-durations
+    # has populated the shared cache, per-shard wall time drops well
+    # under 30 min.
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
       - run: uv sync --extra cpu
-      - run: uv run pytest -m slow
+      # actions/cache restores exactly one cache per step, so we cannot
+      # save per-shard partials and hope to merge them at restore time.
+      # Instead, aggregate-durations (below) merges every shard's output
+      # into a single .test_durations and saves it under a stable
+      # prefix; each shard restores the most recent aggregate here.
+      - name: Restore aggregated slow test durations
+        uses: actions/cache/restore@v4
+        with:
+          path: .test_durations
+          key: slow-durations-aggregated-${{ github.run_id }}
+          restore-keys: |
+            slow-durations-aggregated-
+      # First-run / cross-scope bootstrap: when no cache exists yet
+      # (new PR, branch with its own cache scope, or main right after
+      # merge), download a known-good durations file from the URL in
+      # `vars.SLOW_DURATIONS_SEED_URL`. Once a real run populates the
+      # cache this step is skipped. Keeping timings out of the repo
+      # means we can refresh the seed gist without churning git history.
+      - name: Seed durations from URL if cache empty
+        if: hashFiles('.test_durations') == '' && vars.SLOW_DURATIONS_SEED_URL != ''
+        run: |
+          curl -sSfL "${SEED_URL}" -o .test_durations
+          echo "Seeded $(jq 'length' .test_durations) durations from SLOW_DURATIONS_SEED_URL"
+        env:
+          SEED_URL: ${{ vars.SLOW_DURATIONS_SEED_URL }}
+      # `-o addopts=` overrides pyproject's `-n auto`: sharding is the
+      # parallelism axis here, and stacking xdist on top contends on the
+      # JAX persistent-cache lock (cold cache + many tiny compiles).
+      - run: uv run pytest -o "addopts=" -m slow --splits 8 --group ${{ matrix.group }} --store-durations
+      - name: Upload this shard's durations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slow-durations-${{ matrix.group }}
+          path: .test_durations
+          # upload-artifact@v4 excludes hidden files by default;
+          # `.test_durations` is dot-prefixed so we must opt in.
+          include-hidden-files: true
+          retention-days: 1
+          if-no-files-found: ignore
+
+  aggregate-durations:
+    name: aggregate slow durations
+    needs: test-slow
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Restore previous aggregate
+        uses: actions/cache/restore@v4
+        with:
+          path: previous/.test_durations
+          key: slow-durations-aggregated-${{ github.run_id }}
+          restore-keys: |
+            slow-durations-aggregated-
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: slow-durations-*
+          path: shards/
+      # Merge the prior aggregate with each completed shard's partial.
+      # Shards that timed out / crashed before --store-durations wrote
+      # the file simply contribute nothing; the previous aggregate keeps
+      # their entries until a future run refreshes them.
+      - name: Merge into aggregate
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          merged = {}
+          prev = pathlib.Path('previous/.test_durations')
+          if prev.is_file():
+              try:
+                  merged.update(json.loads(prev.read_text()))
+              except Exception:
+                  pass
+          for f in sorted(pathlib.Path('shards').glob('slow-durations-*/.test_durations')):
+              try:
+                  merged.update(json.loads(f.read_text()))
+              except Exception:
+                  pass
+          if merged:
+              pathlib.Path('.test_durations').write_text(json.dumps(merged, indent=2))
+              print(f"aggregated {len(merged)} test durations")
+          PY
+      - name: Save aggregated durations
+        if: hashFiles('.test_durations') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .test_durations
+          key: slow-durations-aggregated-${{ github.run_id }}

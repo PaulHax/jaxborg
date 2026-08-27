@@ -9,10 +9,16 @@ build/
 .cache/
 jaxborg-exp/
 .bank_cache/
+.ruff_cache/
 mlruns/
 .agent_handoff/
 .jax_cache/
+.test_durations
+.test_durations_cache/
 slurm-*.out
 scripts/dev/catalog_status.json
 outputs/*
+
+docs/
+exp/
 logs/
